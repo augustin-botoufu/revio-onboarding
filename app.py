@@ -31,6 +31,7 @@ from src.pipeline import (
 from src.output_writer import build_zip, split_by_fleet
 from src.schemas import SCHEMAS, header_for
 from src import rules_engine
+from src.excel_report import build_report_xlsx
 
 
 # Mapping between the `detect()` source_type and the YAML `source` slug.
@@ -337,43 +338,59 @@ def render_engine_page():
 
     st.markdown("### 5. Résultat")
     df = result.df
-    st.metric("Véhicules produits", len(df))
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Véhicules produits", len(df))
+    col_b.metric("Anomalies détectées", len(result.conflicts_by_cell or {}))
+    orphan_count = len(result.orphan_df) if result.orphan_df is not None else 0
+    col_c.metric("Plaques orphelines", orphan_count)
     st.dataframe(df, use_container_width=True)
 
     if result.issues:
-        st.markdown(f"#### ⚠️ {len(result.issues)} alerte(s)")
+        st.markdown(f"#### ⚠️ {len(result.issues)} alerte(s) globale(s)")
         issues_df = pd.DataFrame([
             {"plaque": i.plate, "champ": i.field, "source": i.source, "avertissement": i.warning}
             for i in result.issues
         ])
         st.dataframe(issues_df, use_container_width=True, hide_index=True)
-    else:
-        st.success("Aucune alerte — toutes les sources se sont bien alignées ✅")
+
+    if result.orphan_df is not None and not result.orphan_df.empty:
+        st.markdown(f"#### 👻 {len(result.orphan_df)} plaque(s) orpheline(s)")
+        st.caption(
+            "Ces plaques sont présentes dans un fichier loueur mais absentes du fichier "
+            "client. Elles sont exclues du parc final mais listées dans l'onglet "
+            "`plaques_orphelines` du rapport Excel."
+        )
+        st.dataframe(result.orphan_df, use_container_width=True)
+
+    if not result.conflicts_by_cell and not result.issues and orphan_count == 0:
+        st.success("Aucune anomalie — toutes les sources se sont bien alignées ✅")
 
     # --- 6. Download ---
-    st.markdown("### 6. Export CSV Vehicle")
+    st.markdown("### 6. Exports")
     client_name = st.session_state.client_name or "client"
     csv_bytes = df.reset_index(drop=True).to_csv(index=False, sep=";", encoding="utf-8").encode("utf-8")
-    st.download_button(
-        "⬇️ Télécharger vehicle.csv (Revio)",
-        data=csv_bytes,
-        file_name=f"vehicle_{client_name}.csv",
-        mime="text/csv",
-        type="primary",
-        use_container_width=True,
-    )
-    if result.issues:
-        issues_csv = pd.DataFrame([
-            {"plaque": i.plate, "champ": i.field, "source": i.source, "avertissement": i.warning}
-            for i in result.issues
-        ]).to_csv(index=False, sep=";", encoding="utf-8").encode("utf-8")
+    c1, c2 = st.columns(2)
+    with c1:
         st.download_button(
-            "⬇️ Télécharger issues.csv",
-            data=issues_csv,
-            file_name=f"issues_{client_name}.csv",
+            "⬇️ Télécharger vehicle.csv (Revio)",
+            data=csv_bytes,
+            file_name=f"vehicle_{client_name}.csv",
             mime="text/csv",
+            type="primary",
             use_container_width=True,
         )
+    with c2:
+        try:
+            xlsx_bytes = build_report_xlsx(result, client_name=client_name)
+            st.download_button(
+                "⬇️ Télécharger rapport.xlsx (sources / anomalies / orphelines)",
+                data=xlsx_bytes,
+                file_name=f"rapport_{client_name}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        except Exception as e:
+            st.error(f"Impossible de construire le rapport Excel : {e}")
 
 
 if st.session_state.mode == "engine":
