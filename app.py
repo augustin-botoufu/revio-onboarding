@@ -93,11 +93,207 @@ CLIENT_FILE_MAPPABLE_FIELDS = [
 
 # ========== Page config ==========
 st.set_page_config(
-    page_title="Revio - Outil d'onboarding",
-    page_icon="🚗",
+    page_title="Revio — Onboarding",
+    page_icon=str(Path(__file__).parent / "src" / "assets" / "logo.svg")
+    if (Path(__file__).parent / "src" / "assets" / "logo.svg").exists()
+    else "🚗",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+# ========== Branding (logo in the top-left, replaces the old sidebar title) ==========
+_ASSET_DIR = Path(__file__).parent / "src" / "assets"
+_LOGO_WORDMARK = _ASSET_DIR / "logo_wordmark.svg"  # full "R + revio"
+_LOGO_ICON = _ASSET_DIR / "logo.svg"               # just the R (sidebar collapsed)
+if _LOGO_WORDMARK.exists():
+    try:
+        st.logo(
+            str(_LOGO_WORDMARK),
+            icon_image=str(_LOGO_ICON) if _LOGO_ICON.exists() else None,
+            size="large",
+        )
+    except TypeError:
+        # Streamlit <1.37: `size` kwarg not supported.
+        st.logo(
+            str(_LOGO_WORDMARK),
+            icon_image=str(_LOGO_ICON) if _LOGO_ICON.exists() else None,
+        )
+
+
+# ========== Custom style (typography + component polish) ==========
+def _inject_custom_style() -> None:
+    """Give the app a modern, editorial look on top of the base theme.
+
+    - Inter (Google Fonts) as the primary typeface.
+    - Softer borders, unified 8-10px radius, tightened spacing.
+    - Hides Streamlit's default top chrome (menu, deploy button, footer).
+    Additive: the .streamlit/config.toml theme stays the source of truth
+    for colors — this stylesheet only refines typography + components.
+    """
+    st.markdown(
+        """
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+          html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stSidebar"] {
+              font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif !important;
+          }
+
+          /* Hide Streamlit's default top chrome */
+          #MainMenu { visibility: hidden; }
+          footer { visibility: hidden; }
+          header[data-testid="stHeader"] { background: transparent; height: 0; }
+
+          .main .block-container {
+              padding-top: 2.25rem;
+              padding-bottom: 4rem;
+              max-width: 1240px;
+          }
+
+          /* Typography */
+          h1, h2, h3, h4, h5, h6 {
+              font-family: 'Inter', sans-serif !important;
+              font-weight: 600 !important;
+              letter-spacing: -0.015em;
+              color: #0F172A;
+          }
+          h1 { font-size: 1.875rem !important; line-height: 1.2; }
+          h2 { font-size: 1.375rem !important; margin-top: 1.75rem !important; }
+          h3 { font-size: 1.0625rem !important; margin-top: 1.25rem !important; color: #1E293B !important; }
+          [data-testid="stCaptionContainer"], .stCaption { color: #64748B !important; font-size: 0.85rem; }
+
+          /* Buttons */
+          .stButton > button,
+          [data-testid="stFormSubmitButton"] > button,
+          [data-testid="stDownloadButton"] > button {
+              border-radius: 8px !important;
+              border: 1px solid #E2E8F0 !important;
+              font-weight: 500 !important;
+              padding: 0.5rem 1rem !important;
+              transition: all 0.15s ease !important;
+              box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+          }
+          .stButton > button:hover,
+          [data-testid="stFormSubmitButton"] > button:hover,
+          [data-testid="stDownloadButton"] > button:hover {
+              border-color: #CBD5E1 !important;
+              background: #F8FAFC !important;
+          }
+          .stButton > button[kind="primary"],
+          [data-testid="stFormSubmitButton"] > button[kind="primary"],
+          [data-testid="stDownloadButton"] > button[kind="primary"] {
+              background: #0F172A !important;
+              color: #FFFFFF !important;
+              border-color: #0F172A !important;
+          }
+          .stButton > button[kind="primary"]:hover {
+              background: #1E293B !important;
+              border-color: #1E293B !important;
+          }
+
+          /* Inputs */
+          .stTextInput input, .stTextArea textarea,
+          .stSelectbox div[data-baseweb="select"] > div,
+          .stNumberInput input, .stDateInput input {
+              border-radius: 8px !important;
+              border-color: #E2E8F0 !important;
+          }
+
+          /* Expanders */
+          [data-testid="stExpander"] {
+              border: 1px solid #E2E8F0 !important;
+              border-radius: 10px !important;
+              box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+              background: #FFFFFF;
+          }
+          [data-testid="stExpander"] summary { font-weight: 500 !important; }
+
+          /* Alerts */
+          div[data-testid="stAlert"] {
+              border-radius: 10px !important;
+              padding: 0.875rem 1rem !important;
+              font-size: 0.9rem;
+              border: 1px solid rgba(15, 23, 42, 0.06);
+          }
+
+          /* Tabs */
+          [data-testid="stTabs"] [role="tablist"] {
+              border-bottom: 1px solid #E2E8F0;
+              gap: 0.125rem;
+          }
+          [data-testid="stTabs"] [role="tab"] {
+              font-weight: 500;
+              color: #64748B;
+              padding: 0.625rem 1rem;
+          }
+          [data-testid="stTabs"] [role="tab"][aria-selected="true"] { color: #0F172A; }
+
+          /* Dataframes */
+          [data-testid="stDataFrame"], [data-testid="stTable"] {
+              border-radius: 10px;
+              overflow: hidden;
+              border: 1px solid #E2E8F0;
+          }
+
+          /* Metrics */
+          [data-testid="stMetric"] {
+              background: #FFFFFF;
+              border: 1px solid #E2E8F0;
+              border-radius: 10px;
+              padding: 1rem 1.25rem;
+              box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03);
+          }
+
+          /* File uploader */
+          [data-testid="stFileUploader"] section {
+              border-radius: 10px;
+              border: 1px dashed #CBD5E1;
+              background: #F8FAFC;
+          }
+
+          /* Sidebar polish */
+          [data-testid="stSidebar"] {
+              background: #FAFBFC;
+              border-right: 1px solid #E2E8F0;
+          }
+          [data-testid="stSidebar"] h3 {
+              font-size: 0.72rem !important;
+              text-transform: uppercase;
+              letter-spacing: 0.08em;
+              color: #94A3B8 !important;
+              font-weight: 600 !important;
+              margin-top: 1.5rem !important;
+              margin-bottom: 0.5rem !important;
+          }
+          [data-testid="stSidebar"] hr { margin: 1rem 0 !important; border-color: #E2E8F0; }
+          [data-testid="stSidebar"] [data-baseweb="radio"] { padding: 0.25rem 0; }
+          [data-testid="stSidebar"] [data-baseweb="radio"] label {
+              font-size: 0.93rem; font-weight: 500;
+          }
+
+          /* st.logo sizing */
+          [data-testid="stLogo"], [data-testid="stSidebarHeader"] img {
+              height: 36px !important; width: auto !important;
+          }
+
+          /* Divider */
+          hr { border-color: #E2E8F0; margin: 1.25rem 0; }
+
+          /* Popover trigger */
+          [data-testid="stPopover"] button {
+              border-radius: 8px;
+              background: #FFFFFF;
+              border: 1px solid #E2E8F0;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+_inject_custom_style()
+
 
 # ========== Session state init ==========
 def _init_state():
@@ -128,11 +324,10 @@ _init_state()
 
 # ========== Sidebar ==========
 with st.sidebar:
-    st.title("🚗 Revio Onboarding")
-    st.caption("Outil interne de génération des fichiers d'import Revio.")
+    # Branding is handled by st.logo() at the top; no heavy title here.
+    st.caption("Outil interne d'onboarding — génération des fichiers d'import.")
 
-    st.markdown("---")
-    st.markdown("### 📍 Navigation")
+    st.markdown("### Navigation")
     MODE_OPTIONS = ["classic", "engine", "rules"]
     MODE_LABELS = {
         "classic": "📥 Import — Flow classique",
