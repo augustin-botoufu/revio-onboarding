@@ -286,6 +286,105 @@ def _inject_custom_style() -> None:
               background: #FFFFFF;
               border: 1px solid #E2E8F0;
           }
+
+          /* Sidebar nav: full-width, left-aligned buttons (replaces radio) */
+          [data-testid="stSidebar"] .stButton > button {
+              justify-content: flex-start !important;
+              text-align: left !important;
+              padding-left: 0.875rem !important;
+              padding-right: 0.875rem !important;
+              font-weight: 500 !important;
+              box-shadow: none !important;
+              background: transparent !important;
+              border: 1px solid transparent !important;
+              color: #475569 !important;
+              margin-bottom: 0.125rem !important;
+          }
+          [data-testid="stSidebar"] .stButton > button:hover {
+              background: #F1F5F9 !important;
+              color: #0F172A !important;
+              border-color: transparent !important;
+          }
+          [data-testid="stSidebar"] .stButton > button[kind="primary"] {
+              background: #0F172A !important;
+              color: #FFFFFF !important;
+              border-color: #0F172A !important;
+          }
+          [data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+              background: #1E293B !important;
+              color: #FFFFFF !important;
+          }
+
+          /* Home page: action cards */
+          .home-hero {
+              background: linear-gradient(135deg, #F8FAFC 0%, #EEF2F7 100%);
+              border: 1px solid #E2E8F0;
+              border-radius: 16px;
+              padding: 2.25rem 2.5rem;
+              margin-bottom: 2rem;
+          }
+          .home-hero h1 { margin-top: 0 !important; margin-bottom: 0.35rem !important; }
+          .home-hero p { color: #475569; font-size: 1rem; max-width: 640px; margin: 0; }
+
+          /* Stepper: horizontal progress in main page (replaces sidebar Étapes) */
+          .rv-stepper {
+              display: flex;
+              gap: 0.5rem;
+              margin: 0 0 1.5rem 0;
+              padding: 0.5rem 0;
+              overflow-x: auto;
+          }
+          .rv-step {
+              display: flex;
+              align-items: center;
+              gap: 0.5rem;
+              padding: 0.5rem 0.875rem;
+              border-radius: 999px;
+              border: 1px solid #E2E8F0;
+              background: #FFFFFF;
+              font-size: 0.85rem;
+              font-weight: 500;
+              color: #64748B;
+              white-space: nowrap;
+              cursor: default;
+          }
+          .rv-step.is-active {
+              background: #0F172A;
+              border-color: #0F172A;
+              color: #FFFFFF;
+          }
+          .rv-step.is-done {
+              background: #F1F5F9;
+              border-color: #CBD5E1;
+              color: #334155;
+          }
+          .rv-step .rv-step-num {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 22px; height: 22px;
+              border-radius: 50%;
+              background: #E2E8F0;
+              color: #334155;
+              font-size: 0.75rem;
+              font-weight: 600;
+          }
+          .rv-step.is-active .rv-step-num { background: rgba(255,255,255,0.2); color: #FFFFFF; }
+          .rv-step.is-done .rv-step-num { background: #CBD5E1; color: #0F172A; }
+
+          /* Small "pill" badge (session overrides indicator, etc.) */
+          .rv-pill {
+              display: inline-flex;
+              align-items: center;
+              gap: 0.35rem;
+              padding: 0.25rem 0.625rem;
+              border-radius: 999px;
+              background: #FEF3C7;
+              color: #92400E;
+              font-size: 0.78rem;
+              font-weight: 500;
+              border: 1px solid #FDE68A;
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -304,7 +403,7 @@ def _init_state():
         "llm_proposals": {},        # {key: {target_field: source_col}}
         "fleet_mapping": {},        # {agency_code: fleet_name}
         "step": 1,
-        "mode": "classic",          # "classic" (5-step flow) | "engine" (YAML rules engine)
+        "mode": "home",             # "home" | "classic" | "engine" | "rules"
         # --- engine mode ---
         "engine_files": {},         # {filename: {"df": DataFrame, "slug": str, "detected": str}}
         "engine_overrides": {},     # {(slug, field): source_col}
@@ -323,34 +422,46 @@ _init_state()
 
 
 # ========== Sidebar ==========
+# Structure:
+#   - st.logo() — handled above, renders the R + "revio" wordmark
+#   - Navigation: 4 button-style menu items (Accueil / Import classique / Moteur / Règles)
+#   - Contexte: client name + API key status (only on onboarding modes)
+#   - Instructions spéciales: collapsed expander (only on onboarding modes)
+NAV_ITEMS = [
+    ("home",    "🏠",  "Accueil"),
+    ("classic", "📥",  "Import — Flow classique"),
+    ("engine",  "🧪",  "Import — Moteur de règles"),
+    ("rules",   "⚙️",  "Règles d'import"),
+]
+
 with st.sidebar:
-    # Branding is handled by st.logo() at the top; no heavy title here.
     st.caption("Outil interne d'onboarding — génération des fichiers d'import.")
 
     st.markdown("### Navigation")
-    MODE_OPTIONS = ["classic", "engine", "rules"]
-    MODE_LABELS = {
-        "classic": "📥 Import — Flow classique",
-        "engine": "🧪 Import — Moteur de règles",
-        "rules": "⚙️ Règles d'import",
-    }
-    current_mode = st.session_state.mode if st.session_state.mode in MODE_OPTIONS else "classic"
-    mode_label = st.radio(
-        "Mode",
-        options=MODE_OPTIONS,
-        index=MODE_OPTIONS.index(current_mode),
-        format_func=lambda m: MODE_LABELS[m],
-        label_visibility="collapsed",
-    )
-    st.session_state.mode = mode_label
+    for slug, icon, label in NAV_ITEMS:
+        active = st.session_state.mode == slug
+        if st.button(
+            f"{icon}  {label}",
+            key=f"nav_{slug}",
+            use_container_width=True,
+            type="primary" if active else "secondary",
+        ):
+            if not active:
+                st.session_state.mode = slug
+                st.rerun()
 
-    # Quick indicator: number of active rule overrides in this session.
+    # Session-scoped rule overrides indicator — small pill badge, not a caption.
     _nb_overrides = rules_io.count_active_overrides(st.session_state.get("rules_overrides"))
     if _nb_overrides > 0:
-        st.caption(f"✎ {_nb_overrides} règle(s) personnalisée(s) active(s) cette session.")
+        st.markdown(
+            f"<div style='margin-top:0.5rem'><span class='rv-pill'>✎ {_nb_overrides} règle(s) personnalisée(s)</span></div>",
+            unsafe_allow_html=True,
+        )
 
+    # --- Contexte (only on onboarding modes) ---
     if st.session_state.mode in ("classic", "engine"):
         st.markdown("---")
+        st.markdown("### Contexte")
         st.session_state.client_name = st.text_input(
             "Nom du client",
             value=st.session_state.client_name,
@@ -358,8 +469,7 @@ with st.sidebar:
             help="Utilisé pour nommer le dossier de sortie.",
         )
 
-        # Look for the API key in (1) Streamlit Cloud secrets, (2) local .env,
-        # (3) fallback to manual input in the sidebar.
+        # API key: (1) Streamlit Cloud secrets, (2) local .env, (3) manual paste.
         api_key_env = os.environ.get("ANTHROPIC_API_KEY", "")
         if not api_key_env:
             try:
@@ -371,53 +481,147 @@ with st.sidebar:
         if api_key_env:
             st.success("Clé Anthropic détectée ✓")
         else:
-            st.warning("Pas de clé configurée - saisis-la ci-dessous pour activer le mapping IA.")
+            st.warning("Pas de clé API — colle-la pour activer le mapping IA.")
             pasted = st.text_input("Clé Anthropic (sk-ant-...)", type="password")
             if pasted:
                 os.environ["ANTHROPIC_API_KEY"] = pasted
 
-        st.markdown("---")
-        st.markdown("### ✍️ Instructions spéciales")
-        st.caption(
-            "Règles en langage naturel qui s'appliquent à tout l'onboarding. "
-            "Ex: *Pour ce client, un VP-BR = service*. *Si la date fin est vide, calcule Date début + Durée.*"
-        )
-        st.session_state.user_instructions = st.text_area(
-            "Instructions",
-            value=st.session_state.user_instructions,
-            height=160,
-            label_visibility="collapsed",
-        )
+        with st.expander("✍️ Instructions spéciales", expanded=False):
+            st.caption(
+                "Règles en langage naturel qui s'appliquent à tout l'onboarding. "
+                "*Ex : Pour ce client, un VP-BR = service. Si la date fin est vide, calcule Date début + Durée.*"
+            )
+            st.session_state.user_instructions = st.text_area(
+                "Instructions",
+                value=st.session_state.user_instructions,
+                height=140,
+                label_visibility="collapsed",
+            )
 
-    if st.session_state.mode == "classic":
-        st.markdown("---")
-        st.markdown("### Étapes")
-        st.session_state.step = st.radio(
-            "Étape",
-            options=[1, 2, 3, 4, 5],
-            index=st.session_state.step - 1,
-            format_func=lambda i: {
-                1: "1️⃣ Upload des fichiers",
-                2: "2️⃣ Détection & schéma cible",
-                3: "3️⃣ Mapping des colonnes",
-                4: "4️⃣ Découpage des flottes",
-                5: "5️⃣ Sorties & erreurs",
-            }[i],
-            label_visibility="collapsed",
+
+# ========== Home page (landing) ==========
+def render_home_page() -> None:
+    """Welcoming landing page: hero + 3 action cards pointing to each mode.
+
+    Shown on arrival (mode default = "home") and whenever the user clicks
+    the "🏠 Accueil" item in the sidebar.
+    """
+    # Hero band
+    st.markdown(
+        """
+        <div class="home-hero">
+          <h1>Onboarding Revio</h1>
+          <p>Transforme les fichiers reçus d'un client (API Plaques, exports loueurs,
+          fichier interne) en imports Revio prêts à lancer. Moteur de règles YAML,
+          mapping IA assisté, contrôle qualité intégré.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Primary CTA + quick-access cards
+    st.markdown("### Par où veux-tu commencer ?")
+    c1, c2, c3 = st.columns(3, gap="medium")
+
+    with c1:
+        with st.container(border=True):
+            st.markdown("#### 🧪 Moteur de règles")
+            st.caption(
+                "Dépose tes fichiers, le moteur applique les règles YAML et "
+                "produit l'import Vehicle. **Recommandé.**"
+            )
+            if st.button("Ouvrir le moteur", key="home_cta_engine", use_container_width=True, type="primary"):
+                st.session_state.mode = "engine"
+                st.rerun()
+
+    with c2:
+        with st.container(border=True):
+            st.markdown("#### 📥 Flow classique")
+            st.caption(
+                "Le flow en 5 étapes : upload → détection → mapping manuel → "
+                "découpage flottes → exports."
+            )
+            if st.button("Ouvrir le flow", key="home_cta_classic", use_container_width=True):
+                st.session_state.mode = "classic"
+                st.session_state.step = 1
+                st.rerun()
+
+    with c3:
+        with st.container(border=True):
+            st.markdown("#### ⚙️ Règles d'import")
+            st.caption(
+                "Consulte et ajuste la priorité des sources par champ. "
+                "Modifications session-only."
+            )
+            if st.button("Ouvrir les règles", key="home_cta_rules", use_container_width=True):
+                st.session_state.mode = "rules"
+                st.rerun()
+
+    # A soft "what's new" hint at the bottom — keeps the page from feeling empty
+    # without overselling.
+    st.markdown("")
+    st.markdown("---")
+    st.markdown("##### Astuces")
+    a, b, c = st.columns(3, gap="medium")
+    with a:
+        st.markdown("**Un seul onboarding = un seul client.**")
+        st.caption("Dépose tous les fichiers reçus d'un coup, l'outil détecte chaque source automatiquement.")
+    with b:
+        st.markdown("**Les règles peuvent être surchargées.**")
+        st.caption("Sur la page *Règles d'import*, l'ordre de priorité est modifiable pour un onboarding sans toucher la config permanente.")
+    with c:
+        st.markdown("**Tout est interne.**")
+        st.caption("Les fichiers uploadés ne quittent pas l'app Streamlit. Rien n'est persisté côté serveur.")
+
+
+# ========== Classic-mode stepper (horizontal progress bar) ==========
+CLASSIC_STEPS: list[tuple[int, str]] = [
+    (1, "Upload"),
+    (2, "Détection"),
+    (3, "Mapping"),
+    (4, "Flottes"),
+    (5, "Exports"),
+]
+
+
+def _render_classic_stepper() -> None:
+    """Horizontal pill-stepper shown at the top of each classic-mode step.
+
+    Replaces the sidebar radio: users navigate by clicking the pills. Visual
+    state: previous steps = "done" (light), current = "active" (dark), future
+    = default (white).
+    """
+    current = int(st.session_state.get("step", 1))
+
+    # Render the visual strip via HTML for a pixel-perfect pill look.
+    pills = []
+    for n, label in CLASSIC_STEPS:
+        cls = "rv-step"
+        if n == current:
+            cls += " is-active"
+        elif n < current:
+            cls += " is-done"
+        pills.append(
+            f'<div class="{cls}"><span class="rv-step-num">{n}</span>{label}</div>'
         )
-    elif st.session_state.mode == "engine":
-        st.markdown("---")
-        st.info(
-            "Mode **moteur de règles** activé. Ce mode applique les règles déclarées dans "
-            "`src/rules/vehicle.yml` sur les fichiers déposés et produit l'output **Vehicle**. "
-            "Ajuste les priorités dans *⚙️ Règles d'import* si besoin."
-        )
-    else:  # rules
-        st.markdown("---")
-        st.info(
-            "Édite les priorités entre sources pour chaque champ. Les modifications "
-            "s'appliquent **seulement à cet onboarding**, pas aux prochains."
-        )
+    st.markdown(f'<div class="rv-stepper">{"".join(pills)}</div>', unsafe_allow_html=True)
+
+    # Jump buttons sit just below so keyboard/click navigation still works
+    # (HTML pills aren't clickable in Streamlit; the buttons are the real UX).
+    cols = st.columns(len(CLASSIC_STEPS))
+    for idx, (n, label) in enumerate(CLASSIC_STEPS):
+        with cols[idx]:
+            active = n == current
+            if st.button(
+                f"{n}. {label}",
+                key=f"stepper_jump_{n}",
+                use_container_width=True,
+                type="primary" if active else "secondary",
+            ):
+                if not active:
+                    st.session_state.step = n
+                    st.rerun()
+    st.markdown("")  # small spacer before the step content
 
 
 # ========== Engine mode (YAML rules engine, Vehicle only) ==========
@@ -940,14 +1144,26 @@ def _render_field_priority_card(
                     st.rerun()
 
 
-if st.session_state.mode == "engine":
+if st.session_state.mode == "home":
+    render_home_page()
+
+elif st.session_state.mode == "engine":
     render_engine_page()
 
 elif st.session_state.mode == "rules":
     render_rules_page()
 
+# ========== Classic mode: horizontal stepper above step content ==========
+elif st.session_state.mode == "classic":
+    _render_classic_stepper()
+
+# The step branches below only fire when mode == "classic" (other modes have
+# already returned above). Each uses `mode == classic` as a safety guard so a
+# stale session_state.step never leaks into home/engine/rules pages.
+_IS_CLASSIC = st.session_state.mode == "classic"
+
 # ========== Step 1: Upload ==========
-elif st.session_state.step == 1:
+if _IS_CLASSIC and st.session_state.step == 1:
     st.header("1. Upload des fichiers")
     st.markdown(
         "Dépose ici **tous les fichiers** reçus pour ce client : fichiers internes, "
@@ -1003,7 +1219,7 @@ elif st.session_state.step == 1:
 
 
 # ========== Step 2: Detection review ==========
-elif st.session_state.step == 2:
+elif _IS_CLASSIC and st.session_state.step == 2:
     st.header("2. Détection & choix du schéma cible")
     st.caption(
         "Vérifie le type détecté pour chaque fichier. "
@@ -1040,7 +1256,7 @@ elif st.session_state.step == 2:
 
 
 # ========== Step 3: Column mapping ==========
-elif st.session_state.step == 3:
+elif _IS_CLASSIC and st.session_state.step == 3:
     st.header("3. Mapping des colonnes")
     st.caption(
         "Pour chaque fichier, je propose un mapping automatique. Révise-le si besoin. "
@@ -1109,7 +1325,7 @@ elif st.session_state.step == 3:
 
 
 # ========== Step 4: Fleet splitting ==========
-elif st.session_state.step == 4:
+elif _IS_CLASSIC and st.session_state.step == 4:
     st.header("4. Découpage des flottes")
     st.caption(
         "L'outil détecte les agences présentes dans tes fichiers. "
@@ -1149,7 +1365,7 @@ elif st.session_state.step == 4:
 
 
 # ========== Step 5: Outputs & errors ==========
-elif st.session_state.step == 5:
+elif _IS_CLASSIC and st.session_state.step == 5:
     st.header("5. Génération des fichiers Revio")
     if not st.session_state.sources:
         st.info("Rien à traiter.")
