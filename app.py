@@ -31,6 +31,7 @@ from src.pipeline import (
 from src.output_writer import build_zip, split_by_fleet
 from src.schemas import SCHEMAS, header_for
 from src import rules_engine
+from src import rules_io
 from src.excel_report import build_report_xlsx
 
 
@@ -112,6 +113,10 @@ def _init_state():
         "engine_files": {},         # {filename: {"df": DataFrame, "slug": str, "detected": str}}
         "engine_overrides": {},     # {(slug, field): source_col}
         "engine_result": None,      # EngineResult (dataclass) or None
+        # --- rules editor (session-scoped priority overrides) ---
+        # Shape: {table_slug: {field_name: [source_slug_in_priority_order]}}
+        "rules_overrides": {},
+        "rules_active_table": "vehicle",
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -127,61 +132,71 @@ with st.sidebar:
     st.caption("Outil interne de génération des fichiers d'import Revio.")
 
     st.markdown("---")
-    st.markdown("### ⚙️ Mode")
+    st.markdown("### 📍 Navigation")
+    MODE_OPTIONS = ["classic", "engine", "rules"]
+    MODE_LABELS = {
+        "classic": "📥 Import — Flow classique",
+        "engine": "🧪 Import — Moteur de règles",
+        "rules": "⚙️ Règles d'import",
+    }
+    current_mode = st.session_state.mode if st.session_state.mode in MODE_OPTIONS else "classic"
     mode_label = st.radio(
         "Mode",
-        options=["classic", "engine"],
-        index=0 if st.session_state.mode == "classic" else 1,
-        format_func=lambda m: {
-            "classic": "Flow classique (5 étapes)",
-            "engine": "🧪 Moteur de règles (beta, Vehicle)",
-        }[m],
+        options=MODE_OPTIONS,
+        index=MODE_OPTIONS.index(current_mode),
+        format_func=lambda m: MODE_LABELS[m],
         label_visibility="collapsed",
     )
     st.session_state.mode = mode_label
 
-    st.markdown("---")
-    st.session_state.client_name = st.text_input(
-        "Nom du client",
-        value=st.session_state.client_name,
-        placeholder="ex. YSEIS",
-        help="Utilisé pour nommer le dossier de sortie.",
-    )
+    # Quick indicator: number of active rule overrides in this session.
+    _nb_overrides = rules_io.count_active_overrides(st.session_state.get("rules_overrides"))
+    if _nb_overrides > 0:
+        st.caption(f"✎ {_nb_overrides} règle(s) personnalisée(s) active(s) cette session.")
 
-    # Look for the API key in (1) Streamlit Cloud secrets, (2) local .env,
-    # (3) fallback to manual input in the sidebar.
-    api_key_env = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key_env:
-        try:
-            api_key_env = st.secrets.get("ANTHROPIC_API_KEY", "")
-            if api_key_env:
-                os.environ["ANTHROPIC_API_KEY"] = api_key_env
-        except Exception:
-            pass
-    if api_key_env:
-        st.success("Clé Anthropic détectée ✓")
-    else:
-        st.warning("Pas de clé configurée - saisis-la ci-dessous pour activer le mapping IA.")
-        pasted = st.text_input("Clé Anthropic (sk-ant-...)", type="password")
-        if pasted:
-            os.environ["ANTHROPIC_API_KEY"] = pasted
+    if st.session_state.mode in ("classic", "engine"):
+        st.markdown("---")
+        st.session_state.client_name = st.text_input(
+            "Nom du client",
+            value=st.session_state.client_name,
+            placeholder="ex. YSEIS",
+            help="Utilisé pour nommer le dossier de sortie.",
+        )
 
-    st.markdown("---")
-    st.markdown("### ✍️ Instructions spéciales")
-    st.caption(
-        "Règles en langage naturel qui s'appliquent à tout l'onboarding. "
-        "Ex: *Pour ce client, un VP-BR = service*. *Si la date fin est vide, calcule Date début + Durée.*"
-    )
-    st.session_state.user_instructions = st.text_area(
-        "Instructions",
-        value=st.session_state.user_instructions,
-        height=160,
-        label_visibility="collapsed",
-    )
+        # Look for the API key in (1) Streamlit Cloud secrets, (2) local .env,
+        # (3) fallback to manual input in the sidebar.
+        api_key_env = os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key_env:
+            try:
+                api_key_env = st.secrets.get("ANTHROPIC_API_KEY", "")
+                if api_key_env:
+                    os.environ["ANTHROPIC_API_KEY"] = api_key_env
+            except Exception:
+                pass
+        if api_key_env:
+            st.success("Clé Anthropic détectée ✓")
+        else:
+            st.warning("Pas de clé configurée - saisis-la ci-dessous pour activer le mapping IA.")
+            pasted = st.text_input("Clé Anthropic (sk-ant-...)", type="password")
+            if pasted:
+                os.environ["ANTHROPIC_API_KEY"] = pasted
+
+        st.markdown("---")
+        st.markdown("### ✍️ Instructions spéciales")
+        st.caption(
+            "Règles en langage naturel qui s'appliquent à tout l'onboarding. "
+            "Ex: *Pour ce client, un VP-BR = service*. *Si la date fin est vide, calcule Date début + Durée.*"
+        )
+        st.session_state.user_instructions = st.text_area(
+            "Instructions",
+            value=st.session_state.user_instructions,
+            height=160,
+            label_visibility="collapsed",
+        )
 
     if st.session_state.mode == "classic":
         st.markdown("---")
-        st.markdown("### Navigation")
+        st.markdown("### Étapes")
         st.session_state.step = st.radio(
             "Étape",
             options=[1, 2, 3, 4, 5],
@@ -195,13 +210,18 @@ with st.sidebar:
             }[i],
             label_visibility="collapsed",
         )
-    else:
+    elif st.session_state.mode == "engine":
         st.markdown("---")
         st.info(
-            "Mode **moteur de règles** activé. Le flow classique est désactivé le temps "
-            "de cette session. Ce mode applique les règles déclarées dans "
-            "`src/rules/vehicle.yml` sur les fichiers déposés et génère uniquement "
-            "l'output **Vehicle**."
+            "Mode **moteur de règles** activé. Ce mode applique les règles déclarées dans "
+            "`src/rules/vehicle.yml` sur les fichiers déposés et produit l'output **Vehicle**. "
+            "Ajuste les priorités dans *⚙️ Règles d'import* si besoin."
+        )
+    else:  # rules
+        st.markdown("---")
+        st.info(
+            "Édite les priorités entre sources pour chaque champ. Les modifications "
+            "s'appliquent **seulement à cet onboarding**, pas aux prochains."
         )
 
 
@@ -275,15 +295,23 @@ def render_engine_page():
         c1, c2 = st.columns([3, 2])
         with c1:
             label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
-            st.markdown(f"**{label}** ({len(info['df'])} lignes)")
-            st.caption(f"Détecté: `{info['detected_type']}` — {info['detected_reason']}")
-            with st.expander("🔍 Aperçu (10 premières lignes)", expanded=False):
-                st.dataframe(info["df"].head(10), use_container_width=True, hide_index=True)
-                st.caption(
-                    f"Colonnes ({len(info['df'].columns)}) : "
-                    + ", ".join(f"`{c}`" for c in list(info["df"].columns)[:15])
-                    + (" ..." if len(info["df"].columns) > 15 else "")
-                )
+            # Split c1 so the 🔍 popover sits inline next to the filename,
+            # instead of spawning a full-width expander that clutters the page.
+            label_col, preview_col = st.columns([9, 1])
+            with label_col:
+                st.markdown(f"**{label}** ({len(info['df'])} lignes)")
+                st.caption(f"Détecté: `{info['detected_type']}` — {info['detected_reason']}")
+            with preview_col:
+                with st.popover("🔍", help="Aperçu du fichier", use_container_width=True):
+                    st.markdown(f"**{label}**")
+                    st.caption(
+                        f"{len(info['df'])} lignes × {len(info['df'].columns)} colonnes"
+                    )
+                    st.dataframe(
+                        info["df"].head(20),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
         with c2:
             current_slug = info.get("slug", "client_file")
             if current_slug not in ENGINE_SOURCE_SLUGS:
@@ -332,6 +360,19 @@ def render_engine_page():
 
     # --- 4. Run ---
     st.markdown("### 4. Lancer le moteur")
+
+    # Show which priority overrides will be used (if any). Transparency matters
+    # so the user sees they're not running defaults.
+    vehicle_overrides: dict[str, list[str]] = (
+        st.session_state.get("rules_overrides", {}).get("vehicle", {})
+    )
+    vehicle_overrides = {k: v for k, v in vehicle_overrides.items() if v}
+    if vehicle_overrides:
+        st.info(
+            f"🎛️ **{len(vehicle_overrides)} règle(s) de priorité personnalisée(s)** seront appliquées — "
+            "cf. *⚙️ Règles d'import* dans le menu de gauche."
+        )
+
     if st.button("▶️ Appliquer les règles Vehicle", type="primary", use_container_width=True):
         source_dfs: dict = {}
         for key, info in engine_files.items():
@@ -342,7 +383,11 @@ def render_engine_page():
         overrides = dict(st.session_state.engine_overrides)
         try:
             with st.spinner("Application des règles..."):
-                result = rules_engine.run_vehicle(source_dfs, manual_column_overrides=overrides)
+                result = rules_engine.run_vehicle(
+                    source_dfs,
+                    manual_column_overrides=overrides,
+                    priority_overrides=vehicle_overrides or None,
+                )
             st.session_state.engine_result = result
         except Exception as e:
             st.error(f"Erreur moteur: {e}")
@@ -410,8 +455,262 @@ def render_engine_page():
             st.error(f"Impossible de construire le rapport Excel : {e}")
 
 
+# ========== Rules editor page ==========
+def render_rules_page():
+    st.header("⚙️ Règles d'import")
+    st.caption(
+        "Configure ici, champ par champ, quelle source gagne sur les autres quand "
+        "plusieurs fichiers donnent une valeur différente pour la même information. "
+        "Ces règles pilotent le moteur de l'onglet *Import — Moteur de règles*."
+    )
+
+    # --- Banner: session scope ---
+    st.warning(
+        "🔒 **Portée session uniquement** — Les modifications faites ici s'appliquent "
+        "à l'onboarding en cours. Elles ne touchent pas les règles par défaut et seront "
+        "perdues à la fermeture de l'app. Utilise *🔄 Réinitialiser tout* pour revenir aux "
+        "valeurs par défaut à tout moment."
+    )
+
+    overrides_all = st.session_state.setdefault("rules_overrides", {})
+    nb_modified = rules_io.count_active_overrides(overrides_all)
+
+    # --- Summary bar ---
+    sc1, sc2 = st.columns([4, 1])
+    with sc1:
+        if nb_modified > 0:
+            st.info(f"✎ **{nb_modified} champ(s) personnalisé(s)** dans cette session.")
+        else:
+            st.success("✅ Aucune modification — les règles par défaut s'appliquent.")
+    with sc2:
+        if nb_modified > 0:
+            if st.button("🔄 Réinitialiser tout", use_container_width=True, key="rules_reset_all"):
+                st.session_state.rules_overrides = {}
+                st.rerun()
+
+    st.markdown("---")
+
+    # --- Table selection (tabs) ---
+    tables = rules_io.list_available_tables()
+    tab_labels = [
+        meta["label"] + ("" if meta["available"] else " — bientôt")
+        for _, meta in tables
+    ]
+    tabs = st.tabs(tab_labels)
+    for i, (slug, meta) in enumerate(tables):
+        with tabs[i]:
+            if meta["available"]:
+                _render_table_rules(slug)
+            else:
+                st.info(
+                    f"Les règles **{meta['label']}** seront disponibles dans une prochaine "
+                    "version. Aujourd'hui, seule la table Véhicules est câblée au moteur."
+                )
+
+
+def _render_table_rules(table_slug: str):
+    """Render the priority editor for a single table (vehicle / contract / ...)."""
+    try:
+        rules_yaml = rules_io.load_rules_yaml(table_slug)
+    except (FileNotFoundError, KeyError) as e:
+        st.error(f"Impossible de charger les règles : {e}")
+        return
+
+    fields_spec = rules_yaml.get("fields", {})
+    if not fields_spec:
+        st.info("Aucun champ déclaré dans ce fichier de règles.")
+        return
+
+    overrides_table = st.session_state.setdefault("rules_overrides", {}).setdefault(
+        table_slug, {}
+    )
+
+    # Which source slugs are currently uploaded in the engine? Used to paint
+    # the "effective" source badges so the user sees at a glance which priority
+    # levels will actually fire for THIS import.
+    uploaded_slugs: set[str] = {
+        info.get("slug")
+        for info in st.session_state.get("engine_files", {}).values()
+        if info.get("slug")
+    }
+
+    # --- Search bar ---
+    sb1, sb2 = st.columns([4, 1])
+    with sb1:
+        query = st.text_input(
+            "🔎 Rechercher un champ",
+            value="",
+            placeholder="ex. usage, motorisation, co2, brand…",
+            key=f"rules_search_{table_slug}",
+            label_visibility="collapsed",
+        ).strip().lower()
+    with sb2:
+        show_only_modified = st.toggle(
+            "Modifiés uniquement",
+            value=False,
+            key=f"rules_only_modified_{table_slug}",
+        )
+
+    # --- Group by category ---
+    categories = rules_io.categorize_fields(table_slug, fields_spec)
+    cat_tabs = st.tabs([c[0] for c in categories])
+
+    for i, (cat_label, field_names) in enumerate(categories):
+        with cat_tabs[i]:
+            # Filter per search / modified toggle
+            filtered = []
+            for fname in field_names:
+                if fname not in fields_spec:
+                    continue
+                if query and query not in fname.lower() and query not in (
+                    fields_spec[fname].get("description", "").lower()
+                ):
+                    continue
+                if show_only_modified and fname not in overrides_table:
+                    continue
+                filtered.append(fname)
+
+            if not filtered:
+                st.caption("_Aucun champ ne correspond aux filtres._")
+                continue
+
+            for field_name in filtered:
+                _render_field_priority_card(
+                    table_slug,
+                    field_name,
+                    fields_spec[field_name],
+                    overrides_table,
+                    uploaded_slugs,
+                )
+
+
+def _render_field_priority_card(
+    table_slug: str,
+    field_name: str,
+    field_spec: dict,
+    overrides_table: dict,
+    uploaded_slugs: set[str],
+) -> None:
+    """One card per field with reorderable priority list."""
+    default_order = rules_io.default_priority_order(field_spec)  # [(slug, label, prio)]
+    default_slugs = [s for s, _, _ in default_order]
+    labels_by_slug = {s: lbl for s, lbl, _ in default_order}
+
+    current_order = rules_io.resolve_current_order(
+        field_spec, overrides_table.get(field_name)
+    )
+    is_modified = field_name in overrides_table and current_order != default_slugs
+    # If override exists but equals default, clean it up.
+    if field_name in overrides_table and current_order == default_slugs:
+        overrides_table.pop(field_name, None)
+        is_modified = False
+
+    mandatory = field_spec.get("mandatory", False)
+    description = field_spec.get("description", "") or ""
+
+    # Card header badges
+    badges: list[str] = []
+    if mandatory:
+        badges.append("🔒 Obligatoire")
+    if is_modified:
+        badges.append("✎ Modifié cette session")
+    header_badges = ("  ·  " + "  ·  ".join(badges)) if badges else ""
+
+    expander_title = f"**{field_name}** — {description}{header_badges}"
+    with st.expander(expander_title, expanded=is_modified):
+        # "Before / after" helper when modified
+        if is_modified:
+            c_before, c_after = st.columns(2)
+            with c_before:
+                st.caption("Priorité par défaut")
+                st.markdown(
+                    " → ".join(f"`{labels_by_slug.get(s, s)}`" for s in default_slugs)
+                )
+            with c_after:
+                st.caption("Priorité pour cet onboarding")
+                st.markdown(
+                    " → ".join(f"**`{labels_by_slug.get(s, s)}`**" for s in current_order)
+                )
+            st.markdown("")
+
+        # Priority list with up/down arrows
+        for pos, slug in enumerate(current_order):
+            label = labels_by_slug.get(slug, slug)
+            uploaded_mark = "🟢" if slug in uploaded_slugs else "⚪"
+
+            row_cols = st.columns([1, 6, 1, 1, 1])
+            with row_cols[0]:
+                # Colored priority pill via markdown code
+                st.markdown(f"### {pos + 1}")
+            with row_cols[1]:
+                st.markdown(
+                    f"{uploaded_mark} **{label}**  \n"
+                    f"<span style='color:#888;font-size:0.85em'>`{slug}`</span>",
+                    unsafe_allow_html=True,
+                )
+            with row_cols[2]:
+                if pos > 0:
+                    if st.button(
+                        "⬆",
+                        key=f"up_{table_slug}_{field_name}_{slug}",
+                        help="Monter d'un cran",
+                        use_container_width=True,
+                    ):
+                        new_order = list(current_order)
+                        new_order[pos], new_order[pos - 1] = (
+                            new_order[pos - 1],
+                            new_order[pos],
+                        )
+                        overrides_table[field_name] = new_order
+                        st.rerun()
+            with row_cols[3]:
+                if pos < len(current_order) - 1:
+                    if st.button(
+                        "⬇",
+                        key=f"down_{table_slug}_{field_name}_{slug}",
+                        help="Descendre d'un cran",
+                        use_container_width=True,
+                    ):
+                        new_order = list(current_order)
+                        new_order[pos], new_order[pos + 1] = (
+                            new_order[pos + 1],
+                            new_order[pos],
+                        )
+                        overrides_table[field_name] = new_order
+                        st.rerun()
+            with row_cols[4]:
+                if pos == 0:
+                    st.markdown(
+                        "<div style='color:#2e7d32;font-weight:600;text-align:center'>"
+                        "Gagnant</div>",
+                        unsafe_allow_html=True,
+                    )
+
+        # Footer
+        ft1, ft2 = st.columns([4, 1])
+        with ft1:
+            nb_uploaded = sum(1 for s in current_order if s in uploaded_slugs)
+            st.caption(
+                f"🟢 {nb_uploaded}/{len(current_order)} source(s) effectivement chargée(s) pour cet import. "
+                "Les sources ⚪ non chargées sont ignorées par le moteur à l'exécution."
+            )
+        with ft2:
+            if is_modified:
+                if st.button(
+                    "↺ Réinitialiser",
+                    key=f"reset_{table_slug}_{field_name}",
+                    help="Revenir à l'ordre par défaut pour ce champ",
+                    use_container_width=True,
+                ):
+                    overrides_table.pop(field_name, None)
+                    st.rerun()
+
+
 if st.session_state.mode == "engine":
     render_engine_page()
+
+elif st.session_state.mode == "rules":
+    render_rules_page()
 
 # ========== Step 1: Upload ==========
 elif st.session_state.step == 1:
