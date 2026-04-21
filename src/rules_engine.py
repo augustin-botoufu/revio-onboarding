@@ -48,6 +48,7 @@ import pandas as pd
 import yaml  # type: ignore
 
 from . import transforms
+from . import rules_io
 from .normalizers import plate_for_matching
 
 
@@ -343,9 +344,17 @@ def apply_rules(
     rules_yaml: dict,
     source_dfs: dict[str, pd.DataFrame],
     manual_column_overrides: Optional[dict[tuple[str, str], str]] = None,
+    priority_overrides: Optional[dict[str, list[str]]] = None,
 ) -> EngineResult:
-    """Apply all rules declared in `rules_yaml` over the provided source DataFrames."""
+    """Apply all rules declared in `rules_yaml` over the provided source DataFrames.
+
+    `priority_overrides` (optional) lets the UI rewrite the priority order of
+    sources per field for this run only — without mutating the YAML on disk.
+    Format: {field_name: [source_slug_in_priority_order]}. See rules_io.
+    """
     manual_column_overrides = manual_column_overrides or {}
+    if priority_overrides:
+        rules_yaml = rules_io.apply_priority_overrides(rules_yaml, priority_overrides)
     fields_spec: dict[str, dict] = rules_yaml.get("fields", {})
     issues: list[Issue] = []
 
@@ -441,9 +450,15 @@ def run_vehicle(
     source_dfs: dict[str, pd.DataFrame],
     manual_column_overrides: Optional[dict[tuple[str, str], str]] = None,
     rules_path: Optional[str | Path] = None,
+    priority_overrides: Optional[dict[str, list[str]]] = None,
 ) -> EngineResult:
     """Shortcut to run the Vehicle engine with the repo's vehicle.yml."""
     if rules_path is None:
         rules_path = Path(__file__).parent / "rules" / "vehicle.yml"
     rules = load_rules(rules_path)
-    return apply_rules(rules, source_dfs, manual_column_overrides)
+    return apply_rules(
+        rules,
+        source_dfs,
+        manual_column_overrides=manual_column_overrides,
+        priority_overrides=priority_overrides,
+    )
