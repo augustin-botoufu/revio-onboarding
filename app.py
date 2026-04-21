@@ -729,10 +729,30 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
         label = info["filename"] + (
             f" [{info['sheet_name']}]" if info.get("sheet_name") else ""
         )
+        # Memory badge: if this file matched a learned pattern at upload
+        # and its mapping was auto-applied, surface it in the expander
+        # title so the user sees why the selectboxes are pre-filled.
+        learned_id = info.get("learned_match_id")
+        learned_hint = info.get("learned_match_hint")
+        mapping_applied = int(info.get("learned_mapping_applied_count") or 0)
+        memory_badge = (
+            f" · 🧠 mémoire ({mapping_applied} champ{'s' if mapping_applied > 1 else ''})"
+            if learned_id and mapping_applied > 0
+            else ""
+        )
 
         with st.expander(
-            f"🔗 {label} → {slug_label} — mapping des champs", expanded=True
+            f"🔗 {label} → {slug_label} — mapping des champs{memory_badge}",
+            expanded=True,
         ):
+            if learned_id and mapping_applied > 0:
+                st.caption(
+                    f"🧠 Format reconnu : `{learned_id}`"
+                    + (f" · loueur *{learned_hint}*" if learned_hint else "")
+                    + f" — {mapping_applied} champ(s) pré-rempli(s) depuis la mémoire. "
+                    "Tu peux quand même relancer l'IA ou ajuster à la main."
+                )
+
             c1, c2 = st.columns([1, 2])
             with c1:
                 if st.button(
@@ -792,15 +812,103 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                             with st.expander("🔍 Debug IA (pour diagnostic)"):
                                 st.json({"mapping_proposé": proposed, **debug})
                         st.rerun()
+
+                # Memorize button — produces a YAML snippet the user
+                # pastes into src/rules/learned_patterns.yml and commits.
+                # Label changes when the file already matches an existing
+                # pattern so the user knows it's an update path (replace
+                # the existing entry to avoid duplicates).
+                memorize_label = (
+                    "♻️ Mettre à jour ce format"
+                    if learned_id
+                    else "📋 Mémoriser ce format"
+                )
+                if st.button(
+                    memorize_label,
+                    key=f"engine_memorize_{key}",
+                    use_container_width=True,
+                    help=(
+                        "Génère un bloc YAML à coller dans "
+                        "`src/rules/learned_patterns.yml` puis à commit sur "
+                        "GitHub. La prochaine fois qu'un fichier avec la "
+                        "même signature arrive, le mapping sera appliqué "
+                        "automatiquement (plus besoin de cliquer IA)."
+                    ),
+                ):
+                    # Effective per-file mapping drawn from the override dict.
+                    current_mapping: dict[str, str] = {
+                        fld: src_col
+                        for (fk, fld), src_col in st.session_state.engine_overrides.items()
+                        if fk == key and src_col
+                    }
+                    if not current_mapping:
+                        st.warning(
+                            "Aucun champ n'est mappé pour ce fichier — mappe "
+                            "d'abord (IA ou manuel), puis clique sur Mémoriser."
+                        )
+                    else:
+                        # Use the mapped source columns as the pattern
+                        # signature: if these specific headers are present
+                        # in a future file, we're confident it's the same
+                        # format. Falls back to the generic heuristic only
+                        # when nothing is mapped (shouldn't happen here).
+                        signature_cols = [c for c in current_mapping.values() if c]
+                        # Try to recover the logged-in user email if present
+                        # (nice-to-have metadata on the pattern entry).
+                        author_email = None
+                        try:
+                            user_obj = getattr(st, "user", None)
+                            if user_obj is not None:
+                                if hasattr(user_obj, "get"):
+                                    author_email = user_obj.get("email")
+                                else:
+                                    author_email = getattr(user_obj, "email", None)
+                        except Exception:
+                            author_email = None
+                        snippet = lp.format_yaml_snippet(
+                            slug=slug,
+                            filename=info["filename"],
+                            columns=signature_cols or [str(c) for c in df.columns],
+                            loueur_hint=learned_hint or "",
+                            column_mapping=current_mapping,
+                            author=author_email,
+                        )
+                        st.session_state[f"engine_snippet_{key}"] = snippet
+                        st.rerun()
             with c2:
                 st.caption(
                     "Colonnes détectées dans le fichier : "
                     + ", ".join(f"`{c}`" for c in list(df.columns)[:10])
                     + (" ..." if len(df.columns) > 10 else "")
                 )
+
+            # Render the last-generated memorize snippet, if any. Persisted
+            # in session_state so it survives reruns and stays on screen
+            # until the user copies it (or clicks "Masquer").
+            snippet = st.session_state.get(f"engine_snippet_{key}")
+            if snippet:
+                st.markdown(
+                    "##### 📋 Snippet YAML — à coller dans "
+                    "`src/rules/learned_patterns.yml` (sous la clé `patterns:`)"
+                )
+                if learned_id:
+                    st.info(
+                        f"Ce fichier matchait déjà le pattern `{learned_id}`. "
+                        "Remplace l'entrée existante dans "
+                        "`learned_patterns.yml` par le bloc ci-dessous pour "
+                        "éviter les doublons."
+                    )
+                st.code(snippet, language="yaml")
+                if st.button(
+                    "✖️ Masquer le snippet",
+                    key=f"engine_snippet_hide_{key}",
+                ):
+                    st.session_state.pop(f"engine_snippet_{key}", None)
+                    st.rerun()
+
             st.markdown("---")
             for field_name in MANUAL_MAPPABLE_FIELDS:
-                override_key = (slug, field_name)
+                override_key = (key, field_name)
                 current = st.session_state.engine_overrides.get(
                     override_key, ""
                 )
@@ -848,6 +956,11 @@ def render_engine_page():
 
     if uploaded and current_sig != last_sig:
         new_files: dict = {}
+        # Reset per-file column-mapping overrides up front: file_keys are
+        # specific to this upload batch, and stale keys from the previous
+        # batch would linger otherwise. We re-populate below for any file
+        # that matches a learned pattern with a stored column_mapping.
+        st.session_state.engine_overrides = {}
         # Load the learned-patterns memory once per upload batch. Used as a
         # fallback when the hard-coded detector can't identify a file — typical
         # case: a new lessor's "état de parc" whose signature we memorised on
@@ -877,6 +990,21 @@ def render_engine_page():
                     if learned_match is not None:
                         default_slug = learned_match.slug
                         _learned_hits.append(f"{up.name} → `{learned_match.slug}`")
+
+                # If a pattern matched AND carries a column_mapping, hydrate
+                # engine_overrides so the rules engine can read this file
+                # with no user intervention — no IA call, no manual picks.
+                # We only keep mappings that point to columns actually
+                # present in the df (safety against a pattern saved with a
+                # column that later got renamed by the lessor).
+                mapping_applied_count = 0
+                if learned_match is not None and learned_match.column_mapping:
+                    valid_cols = {str(c) for c in df.columns}
+                    for field_name, src_col in learned_match.column_mapping.items():
+                        if src_col and src_col in valid_cols:
+                            st.session_state.engine_overrides[(key, field_name)] = src_col
+                            mapping_applied_count += 1
+
                 new_files[key] = {
                     "df": df,
                     "filename": up.name,
@@ -885,14 +1013,11 @@ def render_engine_page():
                     "detected_type": detected.source_type,
                     "detected_reason": detected.reason,
                     "learned_match_id": learned_match.id if learned_match else None,
+                    "learned_match_hint": learned_match.loueur_hint if learned_match else None,
+                    "learned_mapping_applied_count": mapping_applied_count,
                 }
         st.session_state.engine_files = new_files
         st.session_state.engine_result = None  # invalidate previous run
-        # Clear column-mapping overrides from the previous upload batch:
-        # file_keys are specific to this upload and would otherwise linger
-        # as dead keys, and old (slug, field) legacy keys would collide
-        # with the new per-file mapping flow.
-        st.session_state.engine_overrides = {}
         st.session_state.engine_uploaded_sig = current_sig
         st.success(f"{len(new_files)} fichier(s) chargé(s).")
         if _learned_hits:
