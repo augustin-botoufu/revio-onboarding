@@ -223,7 +223,16 @@ def render_engine_page():
         key="engine_uploader",
     )
 
-    if uploaded:
+    # Only reprocess when the uploaded-file list actually changes. Streamlit
+    # returns the uploader's contents on EVERY rerun (including download-
+    # button clicks), so without this guard we'd wipe engine_result every
+    # time the user downloads an export.
+    current_sig = tuple(
+        (getattr(f, "name", ""), getattr(f, "size", 0)) for f in (uploaded or [])
+    )
+    last_sig = st.session_state.get("engine_uploaded_sig")
+
+    if uploaded and current_sig != last_sig:
         new_files: dict = {}
         for up in uploaded:
             try:
@@ -247,6 +256,7 @@ def render_engine_page():
                 }
         st.session_state.engine_files = new_files
         st.session_state.engine_result = None  # invalidate previous run
+        st.session_state.engine_uploaded_sig = current_sig
         st.success(f"{len(new_files)} fichier(s) chargé(s).")
 
     engine_files = st.session_state.engine_files
@@ -267,6 +277,13 @@ def render_engine_page():
             label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
             st.markdown(f"**{label}** ({len(info['df'])} lignes)")
             st.caption(f"Détecté: `{info['detected_type']}` — {info['detected_reason']}")
+            with st.expander("🔍 Aperçu (10 premières lignes)", expanded=False):
+                st.dataframe(info["df"].head(10), use_container_width=True, hide_index=True)
+                st.caption(
+                    f"Colonnes ({len(info['df'].columns)}) : "
+                    + ", ".join(f"`{c}`" for c in list(info["df"].columns)[:15])
+                    + (" ..." if len(info["df"].columns) > 15 else "")
+                )
         with c2:
             current_slug = info.get("slug", "client_file")
             if current_slug not in ENGINE_SOURCE_SLUGS:
