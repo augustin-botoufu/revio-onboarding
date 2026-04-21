@@ -57,10 +57,7 @@ def _display(slug: str, display_map: dict[str, str]) -> str:
 
 
 def _fmt_val(v: Any) -> str:
-    """Format a value for inclusion in the anomalies cell.
-
-    Strips the trailing `.0` pandas sometimes produces for int-like floats.
-    """
+    """Format a value for inclusion in the anomalies cell."""
     if v is None:
         return "∅"
     if isinstance(v, float) and v.is_integer():
@@ -75,7 +72,6 @@ def _autosize_columns(ws, max_width: int = 60) -> None:
         for cell in col_cells:
             if cell.value is None:
                 continue
-            # For multi-line cells, use the longest line.
             s = str(cell.value)
             longest_line = max((len(line) for line in s.split("\n")), default=0)
             if longest_line > max_len:
@@ -97,10 +93,8 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
     orphan_df = engine_result.orphan_df
 
     wb = Workbook()
-    # Remove default sheet; we add our 3 in order.
     wb.remove(wb.active)
 
-    # Common styles
     header_font = Font(bold=True, color="FFFFFF")
     header_fill = PatternFill("solid", fgColor="305496")
     plate_font = Font(bold=True)
@@ -111,8 +105,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
 
     # ===== Sheet 1: source =====
     ws_src = wb.create_sheet("source")
-    plate_col_header = df.columns[0] if "registrationPlate" in df.columns else "plate_key"
-    # Column headers: "plate" + all fields in output order
     headers = ["plaque"] + list(df.columns)
     ws_src.append(headers)
     for c in ws_src[1]:
@@ -121,7 +113,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
         c.alignment = center_align
 
     for plate_key in df.index:
-        # Display value = registrationPlate if available, else the key.
         plate_display = df.at[plate_key, "registrationPlate"] if "registrationPlate" in df.columns else plate_key
         if plate_display is None or (isinstance(plate_display, float) and plate_display != plate_display):
             plate_display = plate_key
@@ -130,7 +121,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
             src = source_by_cell.get((str(plate_key), field_name))
             row.append(_display(src, display_map) if src else "")
         ws_src.append(row)
-        # Style the plate column
         ws_src.cell(row=ws_src.max_row, column=1).font = plate_font
         ws_src.cell(row=ws_src.max_row, column=1).fill = plate_fill
 
@@ -157,7 +147,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
             if not conflicts:
                 row.append("")
                 continue
-            # Build the description: winner first with [gardé], then others with 'vs'.
             winner_src, winner_val = conflicts[0]
             lines = [f"[gardé] {_display(winner_src, display_map)}={_fmt_val(winner_val)}"]
             for src, val in conflicts[1:]:
@@ -170,7 +159,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
         ws_ano.cell(row=row_idx, column=1).font = plate_font
         ws_ano.cell(row=row_idx, column=1).fill = plate_fill
         if row_has_conflict:
-            # Apply wrap + yellow fill on conflicting cells in this row
             for col_idx, field_name in enumerate(df.columns, start=2):
                 val = ws_ano.cell(row=row_idx, column=col_idx).value
                 if val:
@@ -180,7 +168,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
     ws_ano.freeze_panes = "B2"
     _autosize_columns(ws_ano, max_width=50)
 
-    # Info row at the top if no anomalies
     if anomaly_count == 0:
         ws_ano.insert_rows(2)
         ws_ano.cell(row=2, column=1).value = (
@@ -207,7 +194,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
             c.alignment = center_align
 
         for plate_key in orphan_df.index:
-            # Prefer registrationPlate value if it was recovered, else the key.
             plate_display = plate_key
             if "registrationPlate" in orphan_df.columns:
                 rp = orphan_df.at[plate_key, "registrationPlate"]
@@ -216,7 +202,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
             row = [plate_display]
             for field_name in orphan_df.columns:
                 v = orphan_df.at[plate_key, field_name]
-                # Show None/NaN as empty
                 if v is None or (isinstance(v, float) and v != v):
                     row.append("")
                 else:
@@ -228,7 +213,6 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
         ws_orp.freeze_panes = "B2"
         _autosize_columns(ws_orp, max_width=40)
 
-    # ===== Serialize =====
     buf = BytesIO()
     wb.save(buf)
     return buf.getvalue()

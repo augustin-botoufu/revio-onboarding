@@ -192,9 +192,10 @@ def map_loueur_usage(v: Any) -> Tuple[Optional[str], list[Warning]]:
     s = str(v).strip().lower()
     if s in {"vp", "particulier", "private"}:
         return "private", warnings
-    if s in {"vu", "utilitaire", "utility"}:
+    if s in {"vu", "ctte", "utilitaire", "utility"}:
         return "utility", warnings
-    if s in {"service", "fonction"}:
+    if s in {"vs", "service", "fonction", "dériv vp", "deriv vp", "derivvp"}:
+        # Ayvens "VS" = Véhicule de Société → service in Revio terms.
         return "service", warnings
     warnings.append(f"Usage loueur non reconnu: {v!r}")
     return None, warnings

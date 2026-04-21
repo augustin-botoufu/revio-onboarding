@@ -63,7 +63,7 @@ fields:
     - priority: 4
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
-      column: N° immat
+      column: N° Immat
       transform: normalize_plate
       transform_doc: Normaliser format (tirets)
       example: AB123CD
@@ -408,7 +408,7 @@ fields:
     - priority: 2
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
-      column: CO2
+      column: CO² (g/km)
       transform: to_int
       transform_doc: Entier, g/km
       example: '105'
@@ -494,7 +494,7 @@ fields:
     - priority: 2
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
-      column: Date 1ère MEC
+      column: 1ère MEC
       transform: normalize_date
       transform_doc: Parser JJ/MM/AAAA → YYYY/MM/DD
       example: 15/03/2024
@@ -536,7 +536,7 @@ fields:
     - priority: 2
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
-      column: N° châssis
+      column: N° de chassis
       transform: normalize_vin
       transform_doc: Uppercase, 17 chars
       example: VF1BR0F0566123456
@@ -579,7 +579,7 @@ fields:
     - priority: 2
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
-      column: CV fiscaux
+      column: CV Fisc.
       transform: to_int
       transform_doc: Entier
       example: '5'

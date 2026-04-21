@@ -20,11 +20,60 @@ from .schemas import SCHEMAS, header_for, mandatory_fields_for
 
 # ===================== Data loading =====================
 
+# Keywords that identify a "real" header row. If any cell in a row matches
+# (case-insensitive, ignoring spaces), we treat that row as the header.
+_HEADER_KEYWORDS = (
+    "immat", "plaque", "chassis", "châssis", "marque", "modele", "modèle",
+    "version", "energie", "énergie", "gamme", "mec", "co2", "co²", "cv",
+    "genre", "vin",
+)
+
+
+def _find_header_row(rows: list[list]) -> int:
+    """Find the index of the most likely header row in a list of rows.
+
+    Heuristic: the first row with ≥ 3 non-empty cells AND at least one
+    cell whose normalized text contains a header keyword.
+    """
+    for i, row in enumerate(rows[:20]):  # scan first 20 rows only
+        non_empty = [c for c in row if c is not None and str(c).strip() != ""]
+        if len(non_empty) < 3:
+            continue
+        joined = " | ".join(str(c).lower() for c in non_empty)
+        if any(kw in joined for kw in _HEADER_KEYWORDS):
+            return i
+    return 0  # fallback: first row
+
+
+def _clean_str(s: str) -> str:
+    """Normalize a string: strip + replace non-breaking spaces with regular spaces."""
+    return s.replace("\xa0", " ").strip()
+
+
+def _normalize_headers_and_values(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize column names and string values.
+
+    - Strip leading/trailing whitespace on column names and values.
+    - Replace non-breaking spaces (\\xa0) with regular spaces (lessor exports
+      occasionally sneak these in, which breaks exact column matching).
+    """
+    df = df.rename(columns={c: _clean_str(str(c)) for c in df.columns})
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = df[col].map(lambda v: _clean_str(v) if isinstance(v, str) else v)
+    return df
+
+
 def load_tabular(file) -> list[tuple[str, pd.DataFrame]]:
     """Load a CSV or XLSX uploaded file. Returns a list of (sheet_name, df).
 
     For CSVs the list has one element with sheet_name = ''.
     For XLSX we load every sheet (the user can ignore cover sheets later).
+
+    For XLSX, auto-detects the real header row (handling files like Ayvens
+    Etat de parc that have a logo + metadata block before the data table).
+    Also strips leading/trailing whitespace from column names and string
+    values (which are common in lessor exports).
     """
     name = getattr(file, "name", None) or "uploaded"
     lower = name.lower()
@@ -36,19 +85,27 @@ def load_tabular(file) -> list[tuple[str, pd.DataFrame]]:
                 try:
                     df = pd.read_csv(io.BytesIO(raw), encoding=enc, sep=sep, dtype=str, keep_default_na=False)
                     if df.shape[1] > 1:
-                        return [("", df)]
+                        return [("", _normalize_headers_and_values(df))]
                 except Exception:
                     continue
         # Last resort.
         df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False, engine="python")
-        return [("", df)]
+        return [("", _normalize_headers_and_values(df))]
     if lower.endswith((".xlsx", ".xls", ".xlsm")):
         raw = file.read() if hasattr(file, "read") else open(file, "rb").read()
         xls = pd.ExcelFile(io.BytesIO(raw))
         out = []
         for sheet in xls.sheet_names:
-            df = xls.parse(sheet, dtype=str)
+            # Read without header first to detect where the real headers sit
+            preview = xls.parse(sheet, header=None, dtype=str, nrows=25)
+            if preview.empty:
+                continue
+            rows = preview.values.tolist()
+            header_row = _find_header_row(rows)
+            # Re-read with the detected header row as header
+            df = xls.parse(sheet, header=header_row, dtype=str)
             df = df.fillna("")
+            df = _normalize_headers_and_values(df)
             out.append((sheet, df))
         return out
     raise ValueError(f"Format non supporté: {name}")

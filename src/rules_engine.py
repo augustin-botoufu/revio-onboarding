@@ -175,6 +175,18 @@ def _is_null(v: Any) -> bool:
     return False
 
 
+def _values_differ(a: Any, b: Any) -> bool:
+    """Conflict-aware comparison.
+
+    Strings are compared case-insensitively and ignoring surrounding
+    whitespace, so `'CLIO'` and `'clio '` are NOT a conflict. For other
+    types we fall back to regular equality.
+    """
+    if isinstance(a, str) and isinstance(b, str):
+        return a.strip().casefold() != b.strip().casefold()
+    return a != b
+
+
 def _resolve_cell(
     plate: Any,
     field_name: str,
@@ -232,8 +244,9 @@ def _resolve_cell(
     winner_prio, winner_source, winner_val = contributions[0]
 
     # Conflicts: any contribution with a DIFFERENT value than the winner
+    # (case-insensitive + whitespace-insensitive for strings, to avoid noise).
     conflicts: list[tuple[str, Any]] = []
-    has_conflict = any(c[2] != winner_val for c in contributions)
+    has_conflict = any(_values_differ(c[2], winner_val) for c in contributions)
     if has_conflict:
         # Include the winner first, then all other contributions (dedup by (source, value))
         seen: set[tuple[str, Any]] = set()

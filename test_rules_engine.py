@@ -84,44 +84,44 @@ API_PLAQUES = pd.DataFrame([
 # an external contract and should NOT end up in the client parc.
 AYVENS_ETAT_PARC = pd.DataFrame([
     {
-        "N° immat": "AB-123-CD",
-        "N° châssis": "VF1BR0F0566123456",
+        "N° Immat": "AB-123-CD",
+        "N° de chassis": "VF1BR0F0566123456",
         "Marque": "Renault",
         "Gamme": "Clio",
         "Version": "Intens TCe 90",
         "Energie": "Gazole",
         "Genre": "particulier",
-        "CO2": 108,  # divergent from API Plaques (105) — API wins (prio 1)
-        "CV fiscaux": 5,
-        "Date 1ère MEC": "15/03/2022",
+        "CO² (g/km)":108,  # divergent from API Plaques (105) — API wins (prio 1)
+        "CV Fisc.": 5,
+        "1ère MEC": "15/03/2022",
         "Date début contrat": "2022-03-20",  # becomes parcEntryAt (prio 1 for dates)
     },
     {
-        "N° immat": "IJ-789-KL",
-        "N° châssis": "5YJ3E1EA7NF000123",
+        "N° Immat": "IJ-789-KL",
+        "N° de chassis": "5YJ3E1EA7NF000123",
         "Marque": "Tesla",
         "Gamme": "Model 3",
         "Version": "Long Range",
         "Energie": "Electrique",
         "Genre": "particulier",
-        "CO2": 0,
-        "CV fiscaux": 4,
-        "Date 1ère MEC": "10/01/2024",
+        "CO² (g/km)":0,
+        "CV Fisc.": 4,
+        "1ère MEC": "10/01/2024",
         "Date début contrat": "2024-01-15",
     },
     {
         # Ghost car: in Ayvens but NOT in the client file.
         # Expected behavior: NOT in the output DataFrame, but flagged in issues.
-        "N° immat": "XY-999-ZZ",
-        "N° châssis": "VF9GHOST000000000",
+        "N° Immat": "XY-999-ZZ",
+        "N° de chassis": "VF9GHOST000000000",
         "Marque": "Citroen",
         "Gamme": "C3",
         "Version": "Shine",
         "Energie": "Essence",
         "Genre": "particulier",
-        "CO2": 120,
-        "CV fiscaux": 5,
-        "Date 1ère MEC": "01/06/2021",
+        "CO² (g/km)":120,
+        "CV Fisc.": 5,
+        "1ère MEC": "01/06/2021",
         "Date début contrat": "2021-06-10",
     },
 ])
@@ -171,23 +171,59 @@ def main():
     print(df.to_string())
     print()
     print("=" * 80)
-    print(f" ISSUES ({len(result.issues)})")
+    print(f" ORPHAN PLATES ({0 if result.orphan_df is None else len(result.orphan_df)})")
+    print("=" * 80)
+    if result.orphan_df is not None:
+        print(result.orphan_df.to_string())
+    print()
+    print("=" * 80)
+    print(f" CONFLICTS ({len(result.conflicts_by_cell)})")
+    print("=" * 80)
+    for (plate, field_name), conflicts in list(result.conflicts_by_cell.items())[:20]:
+        parts = " vs ".join(f"{s}={v}" for s, v in conflicts)
+        print(f"  [{plate}] {field_name}: {parts}")
+    print()
+    print("=" * 80)
+    print(f" GLOBAL ISSUES ({len(result.issues)})")
     print("=" * 80)
     for issue in result.issues[:30]:
         print(f"  [{issue.plate}] field={issue.field} source={issue.source} — {issue.warning}")
-    if len(result.issues) > 30:
-        print(f"  ... and {len(result.issues) - 30} more.")
 
     # ---------- Assertions ----------
     # Option 3 (hybride): only client_file plates make it to the output.
-    # Ayvens has 3 cars but XY-999-ZZ isn't in the client file → excluded + flagged.
+    # Ayvens has 3 cars but XY-999-ZZ isn't in the client file → excluded
+    # and moved to orphan_df.
     assert len(df) == 3, f"Expected 3 rows (client file size), got {len(df)}"
     assert "XY999ZZ" not in df.index, "Ghost Ayvens plate should NOT be in output"
 
-    # The ghost plate must appear in issues with the expected warning
-    ghost_issues = [i for i in result.issues if i.plate == "XY999ZZ"]
-    assert len(ghost_issues) >= 1, "Ghost plate should be flagged in issues"
-    assert "absente du fichier client" in ghost_issues[0].warning, ghost_issues[0].warning
+    # The ghost plate must appear in orphan_df, enriched with Ayvens data
+    assert result.orphan_df is not None, "orphan_df should be populated"
+    assert "XY999ZZ" in result.orphan_df.index, "Ghost plate should be in orphan_df"
+    ghost = result.orphan_df.loc["XY999ZZ"]
+    assert ghost["brand"] == "CITROEN", f"orphan brand: {ghost['brand']}"
+    assert ghost["model"] == "C3", f"orphan model: {ghost['model']}"
+    assert "ayvens_etat_parc" in ghost["sources_found"], ghost["sources_found"]
+
+    # Conflict tracking: car 1 has a CO2 conflict (API=105 vs Ayvens=108)
+    car1_co2_conflict = result.conflicts_by_cell.get(("AB123CD", "co2gKm"))
+    assert car1_co2_conflict is not None, (
+        "Expected a conflict on (AB123CD, co2gKm): API=105 vs Ayvens=108"
+    )
+    winner = car1_co2_conflict[0]
+    # Both api_plaques and ayvens_etat_parc are now at priority 1 for co2gKm;
+    # deterministic tie-break = source name alphabetical → api_plaques wins.
+    assert winner[0] == "api_plaques" and winner[1] == 105, winner
+    others = [c for c in car1_co2_conflict[1:] if c[0] == "ayvens_etat_parc"]
+    assert others and others[0][1] == 108, car1_co2_conflict
+
+    # Source tracking: car 1 co2 winner is api_plaques
+    assert result.source_by_cell.get(("AB123CD", "co2gKm")) == "api_plaques"
+    # parcEntryAt for car 1 should come from ayvens_etat_parc (prio 1)
+    assert result.source_by_cell.get(("AB123CD", "parcEntryAt")) == "ayvens_etat_parc"
+    # parcEntryAt for car 2 should fall back to client_file (no Ayvens on car 2)
+    assert result.source_by_cell.get(("EF456GH", "parcEntryAt")) == "client_file"
+    # Country code for every plate is set by the __default__ rule
+    assert result.source_by_cell.get(("AB123CD", "registrationIssueCountryCode")) == "__default__"
 
     # Car 1 (AB-123-CD): API Plaques wins on most fields, client wins on plate,
     # but normalize_plate produces AB-123-CD. The client_file plate value is
