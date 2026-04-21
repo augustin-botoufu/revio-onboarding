@@ -56,8 +56,11 @@ def normalize_date(raw) -> Tuple[Optional[str], list[Warning]]:
                                         "lundi", "mardi", "achat", "restitution", "tbc", "?"]):
         warnings.append(f"Date non exploitable: {raw!r}")
         return None, warnings
-    # Try French-first parsing, fall back to US.
-    for dayfirst in (True, False):
+    # ISO format YYYY-MM-DD / YYYY/MM/DD: year-first, NEVER day-first.
+    iso_first = bool(re.match(r"^\d{4}[\-/\.]\d{1,2}[\-/\.]\d{1,2}\b", s))
+    # Try FR convention first when format is ambiguous (DD/MM/YYYY), then US/ISO.
+    try_order = (False,) if iso_first else (True, False)
+    for dayfirst in try_order:
         try:
             dt = dateparser.parse(s, dayfirst=dayfirst, fuzzy=False)
             return dt.strftime("%Y/%m/%d"), warnings
