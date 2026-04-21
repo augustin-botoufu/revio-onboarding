@@ -488,6 +488,23 @@ def render_rules_page():
                 st.session_state.rules_overrides = {}
                 st.rerun()
 
+    # --- Legend ---
+    with st.expander("ℹ️ Comment lire cette page ?", expanded=False):
+        st.markdown(
+            "**Numéro à gauche** : priorité de la source pour ce champ — "
+            "plus le chiffre est petit, plus elle passe en premier.\n\n"
+            "**Ex-æquo** : plusieurs sources peuvent avoir la même priorité "
+            "(ex : Ayvens, Arval, autre loueur à `2` pour `brand`). En pratique "
+            "une même plaque n'est présente que chez un seul loueur → c'est "
+            "celui-là qui gagne sur sa plaque, sans conflit.\n\n"
+            "**🟢 Source chargée** pour cet import — la règle va s'appliquer.  \n"
+            "**⚪ Source non chargée** — la règle est là mais inerte tant qu'un "
+            "fichier correspondant n'est pas déposé dans le moteur.\n\n"
+            "**⬆ / ⬇** : remonter / descendre une source. Réorganiser **casse "
+            "les ex-æquo** et fige un ordre strict pour ce champ. Utilise *↺ "
+            "Réinitialiser* pour retrouver les priorités par défaut."
+        )
+
     st.markdown("---")
 
     # --- Table selection (tabs) ---
@@ -591,22 +608,33 @@ def _render_field_priority_card(
     overrides_table: dict,
     uploaded_slugs: set[str],
 ) -> None:
-    """One card per field with reorderable priority list."""
+    """One card per field with reorderable priority list.
+
+    When no override is active, the displayed priorities come from the YAML
+    and preserve ties (ex-æquo). Once the user reorders anything, the override
+    is recorded and priorities flatten to 1..N.
+    """
     default_order = rules_io.default_priority_order(field_spec)  # [(slug, label, prio)]
     default_slugs = [s for s, _, _ in default_order]
-    labels_by_slug = {s: lbl for s, lbl, _ in default_order}
 
-    current_order = rules_io.resolve_current_order(
+    current_detailed = rules_io.resolve_current_order(
         field_spec, overrides_table.get(field_name)
-    )
-    is_modified = field_name in overrides_table and current_order != default_slugs
-    # If override exists but equals default, clean it up.
-    if field_name in overrides_table and current_order == default_slugs:
+    )  # [(slug, label, effective_priority)]
+    current_slugs = [s for s, _, _ in current_detailed]
+
+    # An override that equals the default order is noise — clean it up.
+    if field_name in overrides_table and current_slugs == default_slugs:
         overrides_table.pop(field_name, None)
-        is_modified = False
+    is_modified = field_name in overrides_table
 
     mandatory = field_spec.get("mandatory", False)
     description = field_spec.get("description", "") or ""
+
+    # Count ties per effective priority (for the ex-æquo badge).
+    # Only meaningful when NOT modified — an override always flattens ties.
+    prio_counts: dict[int, int] = {}
+    for _, _, p in current_detailed:
+        prio_counts[p] = prio_counts.get(p, 0) + 1
 
     # Card header badges
     badges: list[str] = []
@@ -620,31 +648,45 @@ def _render_field_priority_card(
     with st.expander(expander_title, expanded=is_modified):
         # "Before / after" helper when modified
         if is_modified:
+            labels_by_slug = {s: lbl for s, lbl, _ in default_order}
             c_before, c_after = st.columns(2)
             with c_before:
-                st.caption("Priorité par défaut")
+                st.caption("Priorités par défaut (ex-æquo respectés)")
                 st.markdown(
-                    " → ".join(f"`{labels_by_slug.get(s, s)}`" for s in default_slugs)
+                    " · ".join(
+                        f"`{labels_by_slug.get(s, s)}` _(p{p})_"
+                        for s, _, p in default_order
+                    )
                 )
             with c_after:
-                st.caption("Priorité pour cet onboarding")
+                st.caption("Priorités pour cet onboarding (ordre strict)")
                 st.markdown(
-                    " → ".join(f"**`{labels_by_slug.get(s, s)}`**" for s in current_order)
+                    " · ".join(
+                        f"**`{lbl}`** _(p{p})_"
+                        for _, lbl, p in current_detailed
+                    )
                 )
             st.markdown("")
 
-        # Priority list with up/down arrows
-        for pos, slug in enumerate(current_order):
-            label = labels_by_slug.get(slug, slug)
+        # Priority list with up/down arrows. Prio number shown comes straight
+        # from the YAML when not overridden (ties visible), or flat 1..N when
+        # overridden.
+        for pos, (slug, label, prio) in enumerate(current_detailed):
             uploaded_mark = "🟢" if slug in uploaded_slugs else "⚪"
+            is_tied = prio_counts.get(prio, 0) > 1 and not is_modified
+            tie_badge = (
+                "<span style='color:#b26a00;font-size:0.8em;"
+                "margin-left:0.5em;font-style:italic'>· ex-æquo</span>"
+                if is_tied
+                else ""
+            )
 
-            row_cols = st.columns([1, 6, 1, 1, 1])
+            row_cols = st.columns([1, 6, 1, 1])
             with row_cols[0]:
-                # Colored priority pill via markdown code
-                st.markdown(f"### {pos + 1}")
+                st.markdown(f"### {prio}")
             with row_cols[1]:
                 st.markdown(
-                    f"{uploaded_mark} **{label}**  \n"
+                    f"{uploaded_mark} **{label}**{tie_badge}  \n"
                     f"<span style='color:#888;font-size:0.85em'>`{slug}`</span>",
                     unsafe_allow_html=True,
                 )
@@ -653,10 +695,10 @@ def _render_field_priority_card(
                     if st.button(
                         "⬆",
                         key=f"up_{table_slug}_{field_name}_{slug}",
-                        help="Monter d'un cran",
+                        help="Monter d'un cran (casse les ex-æquo)",
                         use_container_width=True,
                     ):
-                        new_order = list(current_order)
+                        new_order = list(current_slugs)
                         new_order[pos], new_order[pos - 1] = (
                             new_order[pos - 1],
                             new_order[pos],
@@ -664,35 +706,32 @@ def _render_field_priority_card(
                         overrides_table[field_name] = new_order
                         st.rerun()
             with row_cols[3]:
-                if pos < len(current_order) - 1:
+                if pos < len(current_detailed) - 1:
                     if st.button(
                         "⬇",
                         key=f"down_{table_slug}_{field_name}_{slug}",
-                        help="Descendre d'un cran",
+                        help="Descendre d'un cran (casse les ex-æquo)",
                         use_container_width=True,
                     ):
-                        new_order = list(current_order)
+                        new_order = list(current_slugs)
                         new_order[pos], new_order[pos + 1] = (
                             new_order[pos + 1],
                             new_order[pos],
                         )
                         overrides_table[field_name] = new_order
                         st.rerun()
-            with row_cols[4]:
-                if pos == 0:
-                    st.markdown(
-                        "<div style='color:#2e7d32;font-weight:600;text-align:center'>"
-                        "Gagnant</div>",
-                        unsafe_allow_html=True,
-                    )
 
         # Footer
         ft1, ft2 = st.columns([4, 1])
         with ft1:
-            nb_uploaded = sum(1 for s in current_order if s in uploaded_slugs)
+            nb_uploaded = sum(1 for s in current_slugs if s in uploaded_slugs)
+            mode_str = (
+                "ordre strict appliqué"
+                if is_modified
+                else "priorités par défaut (ex-æquo respectés)"
+            )
             st.caption(
-                f"🟢 {nb_uploaded}/{len(current_order)} source(s) effectivement chargée(s) pour cet import. "
-                "Les sources ⚪ non chargées sont ignorées par le moteur à l'exécution."
+                f"🟢 {nb_uploaded}/{len(current_slugs)} source(s) chargée(s) · {mode_str}."
             )
         with ft2:
             if is_modified:

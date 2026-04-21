@@ -146,24 +146,27 @@ def default_priority_order(field_spec: dict) -> list[tuple[str, str, int]]:
 def resolve_current_order(
     field_spec: dict,
     override: list[str] | None,
-) -> list[str]:
-    """Return the ordered list of source slugs to display / apply.
+) -> list[tuple[str, str, int]]:
+    """Return [(slug, label, effective_priority), ...] to display / apply.
 
-    - If `override` is set, that's the order (only keeps slugs that exist in
-      the YAML; stale slugs from a pre-upgrade session are dropped).
-    - Else, the default priority order.
+    - If `override` is None, priorities come straight from the YAML and
+      preserve ties (ex-æquo). Example: [("api_plaques", "API Plaques", 1),
+      ("arval_uat", "...", 2), ("ayvens_etat_parc", "...", 2), ...].
+    - If `override` is set, priorities are flattened to 1..N in the order the
+      user chose, and any YAML slug missing from the override is appended at
+      the end (safer than dropping). Stale slugs from old sessions are
+      filtered out.
     """
-    default = default_priority_order(field_spec)
-    default_slugs = [s for s, _, _ in default]
+    default = default_priority_order(field_spec)  # [(slug, label, yaml_prio)]
     if override is None:
-        return default_slugs
+        return list(default)
+
+    labels = {s: lbl for s, lbl, _ in default}
+    default_slugs = [s for s, _, _ in default]
     clean = [s for s in override if s in default_slugs]
-    # Append any default slug missing from the override (new source added to
-    # the YAML after the override was set) at the end — safer than dropping.
-    for s in default_slugs:
-        if s not in clean:
-            clean.append(s)
-    return clean
+    missing = [s for s in default_slugs if s not in clean]
+    ordered = clean + missing
+    return [(s, labels[s], i + 1) for i, s in enumerate(ordered)]
 
 
 def categorize_fields(table_slug: str, fields_spec: dict) -> list[tuple[str, list[str]]]:
