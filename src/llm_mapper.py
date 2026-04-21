@@ -31,16 +31,52 @@ Tu reçois:
 - Éventuellement des instructions spéciales de l'utilisateur
 
 Tu dois proposer, pour chaque champ du template Revio, la colonne source qui correspond
-le mieux - ou None si aucune colonne ne convient.
+le mieux - ou null si aucune colonne ne convient.
 
 IMPORTANT:
-- Tu réponds UNIQUEMENT en JSON, sans texte avant ou après.
-- Le JSON est un objet avec une clé "mapping" (dict champ_revio -> nom_colonne_source ou null),
-  et une clé "notes" (liste courte de remarques sur des ambiguïtés notables).
+- Tu dois OBLIGATOIREMENT appeler l'outil `propose_column_mapping` avec les arguments
+  `mapping` (dict) et `notes` (liste).
+- Le dict `mapping` doit contenir UNE ENTRÉE PAR CHAMP REVIO, avec comme valeur :
+    * soit le nom EXACT d'une colonne source (respect strict de la casse et des espaces),
+    * soit null si aucune colonne source ne convient.
 - Si plusieurs colonnes sources pourraient convenir, tu choisis la plus spécifique.
-- Si aucune colonne source ne correspond, mets null (pas "N/A" ni chaîne vide).
+- `notes` est une liste courte de remarques sur des ambiguïtés ou des transformations
+  nécessaires. Ne répète pas dedans le mapping lui-même - le mapping est dans `mapping`.
 - Tu tiens compte des instructions spéciales si elles contredisent les évidences.
 """
+
+
+MAPPING_TOOL = {
+    "name": "propose_column_mapping",
+    "description": (
+        "Enregistre le mapping proposé entre les colonnes source et les champs Revio. "
+        "Chaque champ Revio doit être une clé du dict `mapping`, même si la valeur est null."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "mapping": {
+                "type": "object",
+                "description": (
+                    "Dictionnaire {champ_revio: nom_colonne_source_ou_null}. "
+                    "La valeur DOIT être une chaîne exacte correspondant à une colonne "
+                    "source fournie, ou null (pas 'N/A' ni ''). "
+                    "TOUS les champs Revio doivent apparaître comme clés."
+                ),
+                "additionalProperties": {"type": ["string", "null"]},
+            },
+            "notes": {
+                "type": "array",
+                "description": (
+                    "Remarques courtes sur les ambiguïtés ou les transformations à prévoir. "
+                    "Ne pas redécrire le mapping - il est déjà dans `mapping`."
+                ),
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["mapping", "notes"],
+    },
+}
 
 
 def build_user_message(
@@ -110,24 +146,63 @@ def propose_mapping(
     try:
         resp = client.messages.create(
             model=model,
-            max_tokens=2048,
+            max_tokens=4096,
             system=SYSTEM_PROMPT,
+            tools=[MAPPING_TOOL],
+            tool_choice={"type": "tool", "name": "propose_column_mapping"},
             messages=[{"role": "user", "content": user_msg}],
         )
-        # Defensive parsing: some models wrap JSON in code fences.
-        raw = "".join(block.text for block in resp.content if hasattr(block, "text"))
-        raw = raw.strip()
-        if raw.startswith("```"):
-            raw = raw.strip("`")
-            if raw.lower().startswith("json"):
-                raw = raw[4:].strip()
-        parsed = json.loads(raw)
-        mapping = parsed.get("mapping", {})
-        notes = parsed.get("notes", [])
-        # Normalize the None representations.
+        # Extract the tool_use block.
+        mapping: dict = {}
+        notes: list = []
+        raw_text = ""
+        for block in resp.content:
+            if getattr(block, "type", None) == "tool_use":
+                inp = block.input or {}
+                mapping = dict(inp.get("mapping", {}))
+                notes = list(inp.get("notes", []))
+                break
+            if hasattr(block, "text"):
+                raw_text += block.text
+        # Fallback: if tool_use wasn't triggered, try to parse any JSON in the text.
+        if not mapping and raw_text:
+            try:
+                txt = raw_text.strip()
+                if txt.startswith("```"):
+                    txt = txt.strip("`")
+                    if txt.lower().startswith("json"):
+                        txt = txt[4:].strip()
+                parsed = json.loads(txt)
+                mapping = dict(parsed.get("mapping", {}))
+                notes = list(parsed.get("notes", []))
+            except Exception:
+                pass
+
+        # Normalize null-ish values.
         for k, v in list(mapping.items()):
             if v in ("", "null", "None", "N/A", "n/a"):
                 mapping[k] = None
-        return {"mapping": mapping, "_notes": notes}
+
+        # Fuzzy-match values to actual source columns (case/whitespace-insensitive).
+        norm_src = {str(c).strip().lower(): str(c) for c in df.columns}
+        fixed: dict = {}
+        for k, v in mapping.items():
+            if v is None:
+                fixed[k] = None
+                continue
+            v_str = str(v).strip()
+            if v_str in [str(c) for c in df.columns]:
+                fixed[k] = v_str  # exact match
+            else:
+                key = v_str.lower()
+                fixed[k] = norm_src.get(key)  # None if no match
+        mapping = fixed
+
+        # Surface a debug payload so the UI can display it on failure.
+        debug = {
+            "raw_text_preview": raw_text[:500] if raw_text else "",
+            "nb_mapped_non_null": sum(1 for v in mapping.values() if v),
+        }
+        return {"mapping": mapping, "_notes": notes, "_debug": debug}
     except Exception as e:
         return {"_error": f"Erreur LLM: {e}", "_notes": []}

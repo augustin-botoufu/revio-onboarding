@@ -348,3 +348,93 @@ def validate(outputs: dict[str, pd.DataFrame]) -> list[ValidationIssue]:
                         )
                     )
     return issues
+
+
+# ===================== Multi-file merge (engine mode) =====================
+
+
+@dataclass
+class MergedSource:
+    """Result of merging 1..N uploaded files that all resolve to the same slug.
+
+    Used by the engine page to group files by slug and produce a single
+    concatenated DataFrame per slug (ready to feed into the rules engine).
+
+    The concatenated DataFrame always carries a `__source_file` column for
+    traceability — even when a single file resolved to this slug — so the
+    downstream Excel report can say "this cell came from alphabet.xlsx".
+    """
+    slug: str
+    files: list[str]            # human labels, e.g. ["alphabet.xlsx", "leasys.xlsx [feuil1]"]
+    df: pd.DataFrame            # concatenated, with __source_file column
+    n_rows_before_dedup: int    # total rows before the engine's plate dedup kicks in
+
+
+def merge_engine_sources(
+    engine_files: dict[str, dict],
+) -> dict[str, MergedSource]:
+    """Group engine_files by current slug and concat files of the same slug.
+
+    `engine_files` is the dict produced by the Moteur upload step:
+    ```
+    {
+      "file.xlsx::sheet": {
+        "df": DataFrame, "filename": "file.xlsx", "sheet_name": "sheet",
+        "slug": "autre_loueur_etat_parc", ...
+      },
+      ...
+    }
+    ```
+
+    Returns `{slug: MergedSource}`. Each MergedSource has:
+    - a concatenated DataFrame with a `__source_file` column
+    - the list of source labels, in upload order
+    - a row count, pre any engine-side dedup
+
+    The engine's `_index_by_plate` drops duplicate plates keep-first — so the
+    upload ORDER inside each slug is significant. This function preserves the
+    original dict insertion order, which matches upload order.
+
+    Single-file slugs go through the same code path (still get a
+    `__source_file` column) so downstream code can rely on the column being
+    present unconditionally.
+    """
+    # Group by current slug while preserving order.
+    groups: dict[str, list[tuple[str, pd.DataFrame]]] = {}
+    for key, info in engine_files.items():
+        slug = info.get("slug")
+        if not slug:
+            continue
+        label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
+        df = info.get("df")
+        if df is None:
+            continue
+        groups.setdefault(slug, []).append((label, df))
+
+    merged: dict[str, MergedSource] = {}
+    for slug, items in groups.items():
+        labels = [lbl for lbl, _ in items]
+        if len(items) == 1:
+            lbl, df = items[0]
+            out = df.copy()
+            out["__source_file"] = lbl
+            merged[slug] = MergedSource(slug=slug, files=labels, df=out, n_rows_before_dedup=len(out))
+            continue
+
+        # Multi-file: concat with a __source_file marker per row.
+        chunks: list[pd.DataFrame] = []
+        for lbl, df in items:
+            c = df.copy()
+            c["__source_file"] = lbl
+            chunks.append(c)
+        # sort=False keeps column order stable (leftmost file wins for column ordering,
+        # later files' extra columns are appended on the right).
+        concat = pd.concat(chunks, ignore_index=True, sort=False)
+        merged[slug] = MergedSource(
+            slug=slug,
+            files=labels,
+            df=concat,
+            n_rows_before_dedup=len(concat),
+        )
+
+    return merged

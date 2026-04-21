@@ -27,11 +27,13 @@ from src.pipeline import (
     merge_per_schema,
     validate,
     apply_mapping,
+    merge_engine_sources,
 )
 from src.output_writer import build_zip, split_by_fleet
 from src.schemas import SCHEMAS, header_for
 from src import rules_engine
 from src import rules_io
+from src import learned_patterns as lp
 from src.excel_report import build_report_xlsx
 
 
@@ -71,6 +73,37 @@ ENGINE_SOURCE_SLUGS = [
     "assurance_externe",
     "client_file",
 ]
+
+# Human-readable label + icon for each source slug, for the grouped cards
+# in the Moteur page. The tuple is (emoji, label, group_order) — group_order
+# drives the rendering order of the cards so the page reads top-to-bottom in
+# a predictable way (plaques first, then by lessor, then catch-alls at the end).
+SLUG_DISPLAY: dict[str, tuple[str, str, int]] = {
+    "api_plaques":             ("🔢", "API Plaques",                  10),
+    "ayvens_etat_parc":        ("🚗", "Ayvens — État de parc",        20),
+    "ayvens_aen":              ("🚗", "Ayvens — Avis d'échéance",     21),
+    "ayvens_tvs":              ("🚗", "Ayvens — TVS",                  22),
+    "ayvens_and":              ("🚗", "Ayvens — Avis non dépôt",       23),
+    "ayvens_pneus":            ("🚗", "Ayvens — Pneus",                24),
+    "arval_uat":               ("🚙", "Arval — UAT",                   30),
+    "arval_aen":               ("🚙", "Arval — Avis d'échéance",       31),
+    "arval_tvu":               ("🚙", "Arval — TVU",                   32),
+    "arval_and":               ("🚙", "Arval — Avis non dépôt",        33),
+    "arval_pneus":             ("🚙", "Arval — Pneus",                 34),
+    "autre_loueur_etat_parc":  ("📘", "Autre loueur — État de parc",   40),
+    "autre_loueur_aen":        ("📘", "Autre loueur — Avis d'échéance",41),
+    "autre_loueur_tvs":        ("📘", "Autre loueur — TVS",            42),
+    "autre_loueur_and":        ("📘", "Autre loueur — Avis non dépôt", 43),
+    "autre_loueur_pneus":      ("📘", "Autre loueur — Pneus",          44),
+    "assurance_externe":       ("🛡️", "Assurance externe",             50),
+    "client_file":             ("👤", "Fichier client",                90),
+}
+
+
+def slug_display(slug: str) -> tuple[str, str, int]:
+    """Return (emoji, label, order) for a slug. Unknown slugs fall back gracefully."""
+    return SLUG_DISPLAY.get(slug, ("📄", slug, 99))
+
 
 # Fields of the Vehicle schema that need a manual column mapping when the
 # source is `client_file` (no fixed column naming in a client's free-form
@@ -653,6 +686,12 @@ def render_engine_page():
 
     if uploaded and current_sig != last_sig:
         new_files: dict = {}
+        # Load the learned-patterns memory once per upload batch. Used as a
+        # fallback when the hard-coded detector can't identify a file — typical
+        # case: a new lessor's "état de parc" whose signature we memorised on
+        # a previous onboarding.
+        _patterns = lp.load_patterns()
+        _learned_hits: list[str] = []
         for up in uploaded:
             try:
                 pairs = load_tabular(up)
@@ -665,6 +704,17 @@ def render_engine_page():
                 key = f"{up.name}::{sheet_name}" if sheet_name else up.name
                 detected = detect(up.name, df, sheet_name=sheet_name or None)
                 default_slug = DETECTOR_TO_YAML_SLUG.get(detected.source_type, "client_file")
+                learned_match = None
+                # Fire the learned-pattern fallback ONLY when the detector fell
+                # back to client_file (our catch-all). An explicit detection
+                # (api_plaques, ayvens_*, etc.) always wins over the memory.
+                if default_slug == "client_file" and _patterns:
+                    learned_match = lp.match_pattern(
+                        up.name, [str(c) for c in df.columns], _patterns
+                    )
+                    if learned_match is not None:
+                        default_slug = learned_match.slug
+                        _learned_hits.append(f"{up.name} → `{learned_match.slug}`")
                 new_files[key] = {
                     "df": df,
                     "filename": up.name,
@@ -672,56 +722,113 @@ def render_engine_page():
                     "slug": default_slug,
                     "detected_type": detected.source_type,
                     "detected_reason": detected.reason,
+                    "learned_match_id": learned_match.id if learned_match else None,
                 }
         st.session_state.engine_files = new_files
         st.session_state.engine_result = None  # invalidate previous run
         st.session_state.engine_uploaded_sig = current_sig
         st.success(f"{len(new_files)} fichier(s) chargé(s).")
+        if _learned_hits:
+            st.info(
+                "🧠 **Format reconnu depuis la mémoire** — "
+                + " · ".join(_learned_hits)
+            )
 
     engine_files = st.session_state.engine_files
     if not engine_files:
         st.info("Aucun fichier chargé.")
         return
 
-    # --- 2. Type per file (slug override) ---
-    st.markdown("### 2. Type (source YAML) par fichier")
+    # --- 2. Type per file (slug override) — grouped by slug ---
+    st.markdown("### 2. Types détectés — regroupés par source")
     st.caption(
-        "Le type détecté est pré-sélectionné. Tu peux corriger manuellement si besoin. "
-        "Un fichier dont le type est `client_file` passera ensuite par une étape de mapping "
-        "colonne par colonne (cf. ci-dessous)."
+        "Les fichiers sont regroupés par type. Si plusieurs fichiers ciblent le même "
+        "type (ex. deux exports loueurs), ils seront **concaténés automatiquement** "
+        "avant d'entrer dans le moteur, avec une colonne `__source_file` pour la "
+        "traçabilité. Tu peux corriger manuellement le type si la détection s'est "
+        "trompée — le fichier rejoindra alors le bon groupe."
     )
+
+    # Group files by their CURRENT slug. We iterate the engine_files dict so
+    # upload order is preserved within each group (the rules engine's plate
+    # dedup is keep-first — order matters).
+    files_by_slug: dict[str, list[tuple[str, dict]]] = {}
     for key, info in engine_files.items():
-        c1, c2 = st.columns([3, 2])
-        with c1:
-            label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
-            # Split c1 so the 🔍 popover sits inline next to the filename,
-            # instead of spawning a full-width expander that clutters the page.
-            label_col, preview_col = st.columns([9, 1])
-            with label_col:
-                st.markdown(f"**{label}** ({len(info['df'])} lignes)")
-                st.caption(f"Détecté: `{info['detected_type']}` — {info['detected_reason']}")
-            with preview_col:
-                with st.popover("🔍", help="Aperçu du fichier", use_container_width=True):
+        slug = info.get("slug") or "client_file"
+        files_by_slug.setdefault(slug, []).append((key, info))
+
+    # Render groups in SLUG_DISPLAY order so the page reads top-to-bottom in
+    # a predictable way (plaques → ayvens → arval → autres → client).
+    ordered_slugs = sorted(files_by_slug.keys(), key=lambda s: slug_display(s)[2])
+    for slug in ordered_slugs:
+        files_in_group = files_by_slug[slug]
+        emoji, human_label, _ = slug_display(slug)
+        total_rows = sum(len(info["df"]) for _, info in files_in_group)
+        n_files = len(files_in_group)
+
+        with st.container(border=True):
+            # Group header: emoji + human label + file count + row count
+            hc1, hc2 = st.columns([5, 2])
+            with hc1:
+                st.markdown(f"#### {emoji} {human_label}")
+                st.caption(
+                    f"`{slug}`  ·  {n_files} fichier{'s' if n_files > 1 else ''}  "
+                    f"·  {total_rows} ligne{'s' if total_rows > 1 else ''}"
+                )
+            with hc2:
+                if n_files > 1:
+                    st.markdown(
+                        "<div style='margin-top:0.4rem'><span class='rv-pill' "
+                        "style='background:#DBEAFE;color:#1E40AF;border-color:#BFDBFE'>"
+                        f"⇢ Concaténation auto · {n_files} fichiers</span></div>",
+                        unsafe_allow_html=True,
+                    )
+
+            # File rows inside the card
+            for key, info in files_in_group:
+                label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
+                row = st.columns([7, 1, 4])
+                with row[0]:
                     st.markdown(f"**{label}**")
-                    st.caption(
-                        f"{len(info['df'])} lignes × {len(info['df'].columns)} colonnes"
+                    # Detection reason — plus a "🧠 Mémoire" badge when the
+                    # slug came from the learned-patterns fallback instead of
+                    # the hard-coded detector.
+                    badge = ""
+                    if info.get("learned_match_id"):
+                        badge = (
+                            "  <span style='background:#F3E8FF;color:#6B21A8;"
+                            "padding:0.08rem 0.5rem;border-radius:999px;"
+                            "font-size:0.72rem;font-weight:500;border:1px solid "
+                            "#E9D5FF'>🧠 mémoire</span>"
+                        )
+                    st.markdown(
+                        f"<span style='color:#64748B;font-size:0.85em'>"
+                        f"{len(info['df'])} lignes · détecté `{info['detected_type']}` — "
+                        f"{info['detected_reason']}</span>{badge}",
+                        unsafe_allow_html=True,
                     )
-                    st.dataframe(
-                        info["df"].head(20),
-                        use_container_width=True,
-                        hide_index=True,
+                with row[1]:
+                    with st.popover("🔍", help="Aperçu du fichier", use_container_width=True):
+                        st.markdown(f"**{label}**")
+                        st.caption(
+                            f"{len(info['df'])} lignes × {len(info['df'].columns)} colonnes"
+                        )
+                        st.dataframe(
+                            info["df"].head(20),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                with row[2]:
+                    current_slug = info.get("slug", "client_file")
+                    if current_slug not in ENGINE_SOURCE_SLUGS:
+                        current_slug = "client_file"
+                    info["slug"] = st.selectbox(
+                        "Type YAML",
+                        options=ENGINE_SOURCE_SLUGS,
+                        index=ENGINE_SOURCE_SLUGS.index(current_slug),
+                        key=f"engine_slug_{key}",
+                        label_visibility="collapsed",
                     )
-        with c2:
-            current_slug = info.get("slug", "client_file")
-            if current_slug not in ENGINE_SOURCE_SLUGS:
-                current_slug = "client_file"
-            info["slug"] = st.selectbox(
-                "Type YAML",
-                options=ENGINE_SOURCE_SLUGS,
-                index=ENGINE_SOURCE_SLUGS.index(current_slug),
-                key=f"engine_slug_{key}",
-                label_visibility="collapsed",
-            )
 
     # --- 3. Client file column mapping ---
     client_files = [(k, info) for k, info in engine_files.items() if info["slug"] == "client_file"]
@@ -773,12 +880,23 @@ def render_engine_page():
         )
 
     if st.button("▶️ Appliquer les règles Vehicle", type="primary", use_container_width=True):
-        source_dfs: dict = {}
-        for key, info in engine_files.items():
-            slug = info["slug"]
-            # If multiple files share the same slug, we keep the last one (concat would be safer
-            # but untested — we'll upgrade when a real use case shows up).
-            source_dfs[slug] = info["df"]
+        # Concat all files sharing the same slug and tag rows with __source_file
+        # for downstream traceability. Single-file slugs go through the same
+        # code path so the report can always rely on the column existing.
+        merged = merge_engine_sources(engine_files)
+        source_dfs: dict = {slug: ms.df for slug, ms in merged.items()}
+
+        # Surface the merges in the UI — if the user dropped two Ayvens files,
+        # it's important they SEE that we concatenated them (otherwise they
+        # might think the second file got silently dropped).
+        merge_notes = [
+            f"`{slug}` ← {len(ms.files)} fichiers · {ms.n_rows_before_dedup} lignes"
+            for slug, ms in merged.items()
+            if len(ms.files) > 1
+        ]
+        if merge_notes:
+            st.info("⇢ **Concaténation auto** — " + "  ·  ".join(merge_notes))
+
         overrides = dict(st.session_state.engine_overrides)
         try:
             with st.spinner("Application des règles..."):
