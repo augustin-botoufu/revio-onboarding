@@ -10,39 +10,32 @@ Input
   the user (or LLM fallback) picked for the generic "client_file" source
   — per (source_slug, field_name).
 
-Output
-------
-- A pandas.DataFrame whose columns = fields declared in the YAML, in the
-  order they appear in the YAML.
-- An `issues` list: dicts { plate, field, source, warning }
+Output (EngineResult)
+---------------------
+- df: pandas.DataFrame of merged values (columns = YAML fields, rows = client plates)
+- orphan_df: DataFrame with the same columns for plates found in lessor files
+  but absent from the client file (same enrichment logic, but no client file)
+- source_by_cell: dict[(plate, field), source_slug] — who won, per cell
+- conflicts_by_cell: dict[(plate, field), list[(source_slug, value)]] — all
+  contributions for a cell, INCLUDING the winner, when 2+ sources disagreed
+- parse_warnings_by_cell: dict[(plate, field), list[str]] — transform warnings
+  (e.g. "Date non parsable", "VIN I/O/Q interdits"), EXCLUDING "column missing"
+  which is noise
+- issues: list[Issue] — global / non-cell-specific warnings (rare)
 
 Core logic
 ----------
-For each field, sort rules by priority ascending. For each rule in order:
-  1. Locate the source DataFrame. If absent, skip (note: "source not provided").
-  2. Locate the source column:
-     - `column` from the YAML if present,
-     - OR `manual_column_overrides[(source_slug, field)]` if provided,
-     - else skip with note.
-  3. Apply the declared `transform` to each row of that column.
-  4. Merge row-by-row into the accumulating output column: the first
-     non-null value wins (per row). Priorities ex-æquo: same behaviour —
-     first rule that yields a value in the sort order wins. Divergent
-     non-null values from tied priorities are flagged in issues.
+For each field, collect ALL non-null contributions (priority, source, value)
+across ALL applicable rules — no short-circuit on first non-null. Then:
+  - Winner = contribution with lowest priority (then deterministic source order).
+  - Conflict = any contribution whose value differs from the winner's value.
 
 Special cases
 -------------
 - source == "__default__" with example value: used for constant defaults
-  (e.g. registrationIssueCountryCode -> FR).
+  (e.g. registrationIssueCountryCode -> FR). Labeled "défaut" in reports.
 - Rules without `column` AND without override are silently skipped (they
   are placeholders for sources awaiting a sample file).
-
-Row alignment
--------------
-Multiple source DataFrames must align on the plate. The engine first
-builds a combined index = set(all plates across sources). Within a source
-file, rows are indexed by normalized plate; rules read row-by-row from
-the per-source indexed view.
 """
 
 from __future__ import annotations
@@ -63,6 +56,7 @@ from .normalizers import plate_for_matching
 
 @dataclass
 class Issue:
+    """Global, non-cell-specific warning (e.g. 'no client file provided')."""
     plate: Optional[str]
     field: str
     source: str
@@ -73,6 +67,12 @@ class Issue:
 class EngineResult:
     df: pd.DataFrame
     issues: list[Issue] = field(default_factory=list)
+    orphan_df: Optional[pd.DataFrame] = None
+    source_by_cell: dict[tuple[str, str], str] = field(default_factory=dict)
+    conflicts_by_cell: dict[tuple[str, str], list[tuple[str, Any]]] = field(default_factory=dict)
+    parse_warnings_by_cell: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    # Echo of the rules YAML so downstream report can read source_labels
+    rules_yaml: Optional[dict] = None
 
 
 # ---------- YAML loading ----------
@@ -104,7 +104,7 @@ def _find_plate_column(df: pd.DataFrame) -> Optional[str]:
 def _index_by_plate(df: pd.DataFrame, plate_col: Optional[str] = None) -> pd.DataFrame:
     """Return a copy of `df` indexed by normalized plate.
 
-    Rows without a detectable plate are kept at positional index (unindexed).
+    Rows without a detectable plate are dropped.
     """
     if df is None or df.empty:
         return df
@@ -119,7 +119,7 @@ def _index_by_plate(df: pd.DataFrame, plate_col: Optional[str] = None) -> pd.Dat
     return out
 
 
-# ---------- Rule application ----------
+# ---------- Rule application helpers ----------
 
 
 def _get_column(
@@ -145,23 +145,185 @@ def _apply_rule_to_series(
 ) -> tuple[pd.Series, dict[Any, list[str]]]:
     """Apply a transform to `source_df[col]` row by row.
 
-    Returns (series_of_values, dict_of_per_index_warnings).
+    Returns (series_of_values, dict_of_per_index_warnings). Warnings that
+    are purely structural ("column missing in uploaded file") are filtered
+    out by the caller.
     """
     warnings_by_key: dict[Any, list[str]] = {}
     if col not in source_df.columns:
-        # Column declared in rule but missing from uploaded file
         empty = pd.Series([None] * len(source_df), index=source_df.index, dtype=object)
-        return empty, {k: ["column missing in uploaded file"] for k in source_df.index}
+        # NOTE: we do NOT emit "column missing" warnings — they're noise. The
+        # rule itself will simply produce nothing, which is the correct
+        # behaviour when a declared column is absent from the uploaded file.
+        return empty, {}
     values = []
     for key, raw in source_df[col].items():
         val, warns = transforms.apply(transform_name, raw)
         values.append(val)
         if warns:
             warnings_by_key.setdefault(key, []).extend(warns)
-    # Force object dtype so ints mixed with None stay as ints (pandas otherwise
-    # promotes to float64 because int can't carry NaN, producing '109.0' in
-    # the CSV output instead of '109').
+    # Force object dtype so ints mixed with None stay as ints (pandas
+    # otherwise promotes to float64 producing '109.0' in CSV/Excel).
     return pd.Series(values, index=source_df.index, dtype=object), warnings_by_key
+
+
+def _is_null(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, float) and pd.isna(v):
+        return True
+    return False
+
+
+def _resolve_cell(
+    plate: Any,
+    field_name: str,
+    fields_spec: dict,
+    indexed_sources: dict[str, pd.DataFrame],
+    manual_column_overrides: dict[tuple[str, str], str],
+    parse_warnings_by_cell: dict[tuple[str, str], list[str]],
+) -> tuple[Any, Optional[str], list[tuple[str, Any]]]:
+    """Resolve a single (plate, field) cell by running ALL applicable rules.
+
+    Returns (winner_value, winner_source_slug, conflicts_list) where
+    conflicts_list is empty if no conflict, otherwise contains ALL contributing
+    (source_slug, value) pairs (winner first).
+    """
+    spec = fields_spec[field_name]
+    rules = sorted(
+        spec.get("rules", []),
+        key=lambda r: (r.get("priority", 99), r.get("source", "")),
+    )
+    # Collect all contributions (prio, source, value)
+    contributions: list[tuple[int, str, Any]] = []
+    for rule in rules:
+        source_slug = rule.get("source")
+        transform_name = rule.get("transform", "passthrough")
+        prio = rule.get("priority", 99)
+
+        if source_slug == "__default__":
+            # Constants are applied at the end — they never conflict with
+            # anything since they're only used as a fallback. Skip here.
+            continue
+
+        src_df = indexed_sources.get(source_slug)
+        if src_df is None or src_df.empty:
+            continue
+        if plate not in src_df.index:
+            continue
+        col = _get_column(source_slug, field_name, rule, manual_column_overrides)
+        if col is None:
+            continue
+        if col not in src_df.columns:
+            continue
+        raw = src_df.at[plate, col]
+        val, warns = transforms.apply(transform_name, raw)
+        if warns:
+            parse_warnings_by_cell.setdefault((str(plate), field_name), []).extend(warns)
+        if _is_null(val):
+            continue
+        contributions.append((prio, source_slug, val))
+
+    if not contributions:
+        return None, None, []
+
+    # Deterministic winner: first contribution in (prio, source) order
+    contributions.sort(key=lambda x: (x[0], x[1]))
+    winner_prio, winner_source, winner_val = contributions[0]
+
+    # Conflicts: any contribution with a DIFFERENT value than the winner
+    conflicts: list[tuple[str, Any]] = []
+    has_conflict = any(c[2] != winner_val for c in contributions)
+    if has_conflict:
+        # Include the winner first, then all other contributions (dedup by (source, value))
+        seen: set[tuple[str, Any]] = set()
+        for _, src, val in contributions:
+            key = (src, _as_key(val))
+            if key in seen:
+                continue
+            seen.add(key)
+            conflicts.append((src, val))
+
+    return winner_val, winner_source, conflicts
+
+
+def _as_key(v: Any) -> Any:
+    """Hashable representation of a value for dedup."""
+    try:
+        hash(v)
+        return v
+    except TypeError:
+        return str(v)
+
+
+def _apply_defaults_for_plates(
+    plates: list[Any],
+    fields_spec: dict,
+    out_df: pd.DataFrame,
+    source_by_cell: dict[tuple[str, str], str],
+) -> None:
+    """Fill remaining None cells with any __default__ rule from the YAML."""
+    for field_name, spec in fields_spec.items():
+        rules = spec.get("rules", [])
+        default_rule = next((r for r in rules if r.get("source") == "__default__"), None)
+        if default_rule is None:
+            continue
+        constant = default_rule.get("column") or default_rule.get("example")
+        if constant is None:
+            continue
+        transform_name = default_rule.get("transform", "passthrough")
+        val, _ = transforms.apply(transform_name, constant)
+        for plate in plates:
+            current = out_df.at[plate, field_name] if field_name in out_df.columns else None
+            if _is_null(current):
+                out_df.at[plate, field_name] = val
+                source_by_cell[(str(plate), field_name)] = "__default__"
+
+
+def _build_df_for_plates(
+    plates: list[Any],
+    fields_spec: dict,
+    indexed_sources: dict[str, pd.DataFrame],
+    manual_column_overrides: dict[tuple[str, str], str],
+) -> tuple[pd.DataFrame, dict, dict, dict]:
+    """Build a DataFrame for a given plate set, returning tracking structures.
+
+    Returns (df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell).
+    """
+    source_by_cell: dict[tuple[str, str], str] = {}
+    conflicts_by_cell: dict[tuple[str, str], list[tuple[str, Any]]] = {}
+    parse_warnings_by_cell: dict[tuple[str, str], list[str]] = {}
+
+    # Pre-create df with object dtype so ints stay as ints
+    out_df = pd.DataFrame(
+        {f: pd.Series([None] * len(plates), dtype=object) for f in fields_spec.keys()},
+        index=plates,
+    )
+
+    for field_name in fields_spec.keys():
+        for plate in plates:
+            val, winner_src, conflicts = _resolve_cell(
+                plate,
+                field_name,
+                fields_spec,
+                indexed_sources,
+                manual_column_overrides,
+                parse_warnings_by_cell,
+            )
+            if val is not None:
+                out_df.at[plate, field_name] = val
+                source_by_cell[(str(plate), field_name)] = winner_src
+            if conflicts:
+                conflicts_by_cell[(str(plate), field_name)] = conflicts
+
+    # Apply __default__ values for remaining null cells
+    _apply_defaults_for_plates(plates, fields_spec, out_df, source_by_cell)
+
+    out_df.index.name = "plate_key"
+    return out_df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell
+
+
+# ---------- Public API ----------
 
 
 def apply_rules(
@@ -169,51 +331,36 @@ def apply_rules(
     source_dfs: dict[str, pd.DataFrame],
     manual_column_overrides: Optional[dict[tuple[str, str], str]] = None,
 ) -> EngineResult:
-    """Apply all rules declared in `rules_yaml` over the provided source DataFrames.
-
-    Returns an EngineResult with the merged output DataFrame + issues list.
-    """
+    """Apply all rules declared in `rules_yaml` over the provided source DataFrames."""
     manual_column_overrides = manual_column_overrides or {}
     fields_spec: dict[str, dict] = rules_yaml.get("fields", {})
     issues: list[Issue] = []
 
-    # 1. Index each source by normalized plate. For the client file, the
-    #    plate column is user-picked (via manual_column_overrides).
+    # 1. Index each source by normalized plate.
     indexed: dict[str, pd.DataFrame] = {}
     for slug, df in source_dfs.items():
         plate_col = manual_column_overrides.get((slug, "registrationPlate"))
         indexed[slug] = _index_by_plate(df, plate_col=plate_col)
 
-    # 2. Determine the authoritative plate set.
-    #    - If a client file is provided AND has plates: those plates are the
-    #      reference parc. Any plate found in a lessor source but absent from
-    #      the client file is flagged in issues (not silently added to output).
-    #    - Otherwise: fallback to the union of all lessor plates, with a
-    #      global warning so the user knows the parc comes from lessor data.
+    # 2. Determine the authoritative plate set (hybrid strategy).
     client_df = indexed.get("client_file")
     has_client_file = client_df is not None and not client_df.empty
+    orphan_plates: list[Any] = []
 
     if has_client_file:
         all_plates = list(client_df.index)
         client_plate_set = set(all_plates)
-        # Flag plates present in lessor sources but NOT in the client file.
+        # Collect orphan plates: present in lessor sources but absent from client file.
+        seen_orphan: set[Any] = set()
         for slug, df in indexed.items():
             if slug == "client_file" or df is None or df.empty:
                 continue
             for p in df.index:
-                if p and p not in client_plate_set:
-                    issues.append(Issue(
-                        plate=str(p),
-                        field="registrationPlate",
-                        source=slug,
-                        warning=(
-                            f"Plaque présente chez {slug} mais absente du fichier client "
-                            "— à confirmer (véhicule restitué ? oubli dans le fichier parc ? "
-                            "contrat externe ?). Non importée."
-                        ),
-                    ))
+                if p and p not in client_plate_set and p not in seen_orphan:
+                    seen_orphan.add(p)
+                    orphan_plates.append(p)
     else:
-        # No client file: union of all source plates, with a global warning.
+        # No client file: union of all lessor plates, with a global warning.
         all_plates = []
         seen: set[str] = set()
         for df in indexed.values():
@@ -236,90 +383,45 @@ def apply_rules(
             ))
 
     if not all_plates:
-        # No source has a detectable plate column — return an empty output
-        return EngineResult(df=pd.DataFrame(columns=list(fields_spec.keys())), issues=issues)
+        return EngineResult(
+            df=pd.DataFrame(columns=list(fields_spec.keys())),
+            issues=issues,
+            rules_yaml=rules_yaml,
+        )
 
-    # 3. For each field, walk rules in priority order
-    out_df = pd.DataFrame(index=all_plates)
-    winner_source_by_cell: dict[tuple[str, str], str] = {}  # (plate, field) -> source_slug
-    tied_values_by_cell: dict[tuple[str, str], dict[int, dict[str, Any]]] = {}
+    # 3. Build main df from the authoritative plate set.
+    main_df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell = _build_df_for_plates(
+        all_plates, fields_spec, indexed, manual_column_overrides,
+    )
 
-    for field_name, spec in fields_spec.items():
-        rules = sorted(spec.get("rules", []), key=lambda r: (r.get("priority", 99), r.get("source", "")))
-        # Initialize column to None
-        out_df[field_name] = None
-        for rule in rules:
-            source_slug = rule.get("source")
-            transform_name = rule.get("transform", "passthrough")
-            prio = rule.get("priority", 99)
-
-            # Default constant (e.g. registrationIssueCountryCode -> FR)
-            if source_slug == "__default__":
-                constant = rule.get("column") or rule.get("example")
-                if constant is None:
-                    continue
-                # Apply transform to the constant (so normalize_country_code runs)
-                val, warns = transforms.apply(transform_name, constant)
-                for plate in all_plates:
-                    if pd.isna(out_df.at[plate, field_name]) or out_df.at[plate, field_name] is None:
-                        out_df.at[plate, field_name] = val
-                        winner_source_by_cell[(plate, field_name)] = source_slug
+    # 4. Build orphan df (only runs if we have orphan plates).
+    orphan_df: Optional[pd.DataFrame] = None
+    if orphan_plates:
+        # We want orphan enrichment to use lessor files but NOT the client file
+        # (which is irrelevant — these plates aren't in it).
+        indexed_no_client = {k: v for k, v in indexed.items() if k != "client_file"}
+        orphan_df, _, _, _ = _build_df_for_plates(
+            orphan_plates, fields_spec, indexed_no_client, manual_column_overrides,
+        )
+        # Tag each orphan with the source files where it was found
+        found_in: dict[Any, list[str]] = {}
+        for slug, df in indexed.items():
+            if slug == "client_file" or df is None or df.empty:
                 continue
+            for p in orphan_plates:
+                if p in df.index:
+                    found_in.setdefault(p, []).append(slug)
+        orphan_df.insert(0, "sources_found", [", ".join(found_in.get(p, [])) for p in orphan_df.index])
 
-            # Real source
-            src_df = indexed.get(source_slug)
-            if src_df is None or src_df.empty:
-                continue
-            col = _get_column(source_slug, field_name, rule, manual_column_overrides)
-            if col is None:
-                # Rule placeholder: no column known yet for this source (waiting for a sample)
-                continue
-            series, warns_by_key = _apply_rule_to_series(src_df, col, transform_name)
-            # Track warnings
-            for key, wlist in warns_by_key.items():
-                for w in wlist:
-                    issues.append(Issue(plate=str(key), field=field_name, source=source_slug, warning=w))
-            # Merge into out_df: first non-null wins per row; tied priorities flagged
-            for plate in series.index:
-                if plate not in out_df.index:
-                    continue
-                new_val = series.loc[plate]
-                if new_val is None or (isinstance(new_val, float) and pd.isna(new_val)):
-                    continue
-                existing = out_df.at[plate, field_name]
-                if existing is None or (isinstance(existing, float) and pd.isna(existing)):
-                    out_df.at[plate, field_name] = new_val
-                    winner_source_by_cell[(plate, field_name)] = source_slug
-                    tied_values_by_cell.setdefault((plate, field_name), {})[prio] = {source_slug: new_val}
-                else:
-                    # Existing value present. If this rule has same priority → detect divergence
-                    winner_source = winner_source_by_cell.get((plate, field_name))
-                    winner_prio = None
-                    if winner_source:
-                        # Find the priority that assigned the winner
-                        for r2 in rules:
-                            if r2.get("source") == winner_source:
-                                winner_prio = r2.get("priority", 99)
-                                break
-                    if winner_prio is not None and prio == winner_prio and new_val != existing:
-                        issues.append(Issue(
-                            plate=str(plate),
-                            field=field_name,
-                            source=source_slug,
-                            warning=(
-                                f"Conflit ex-æquo prio {prio}: "
-                                f"{winner_source}={existing!r} vs {source_slug}={new_val!r} "
-                                f"→ on garde {winner_source} (1er arrivé)"
-                            ),
-                        ))
-
-    # Final: order columns as declared in the YAML
-    out_df = out_df[[f for f in fields_spec.keys() if f in out_df.columns]]
-    out_df.index.name = "plate_key"
-    return EngineResult(df=out_df, issues=issues)
-
-
-# ---------- Convenience ----------
+    return EngineResult(
+        df=main_df,
+        issues=issues,
+        orphan_df=orphan_df,
+        source_by_cell=source_by_cell,
+        conflicts_by_cell=conflicts_by_cell,
+        parse_warnings_by_cell=parse_warnings_by_cell,
+        rules_yaml=rules_yaml,
+    )
 
 
 def run_vehicle(
