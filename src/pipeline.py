@@ -378,6 +378,7 @@ class MergedSource:
 
 def merge_engine_sources(
     engine_files: dict[str, dict],
+    per_file_overrides: Optional[dict[str, dict[str, str]]] = None,
 ) -> dict[str, MergedSource]:
     """Group engine_files by current slug and concat files of the same slug.
 
@@ -392,6 +393,27 @@ def merge_engine_sources(
     }
     ```
 
+    `per_file_overrides` (optional) is the UI-supplied column mapping per
+    individual file, for slugs whose column names aren't baked into
+    vehicle.yml (typically `client_file` and `autre_loueur_etat_parc`):
+    ```
+    {
+      "file.xlsx::sheet": {
+        "registrationPlate": "Plaque d'immatriculation",
+        "brand": "Marque",
+        ...
+      },
+      ...
+    }
+    ```
+    For each file that appears in `per_file_overrides`, we create
+    `__map__<field>` copies of the mapped columns BEFORE concatenation.
+    This is how we handle the case where two files of the same slug use
+    different source headers (e.g. "Plaque d'immatriculation" vs "Immat.")
+    — after the rename, both files share a canonical `__map__registrationPlate`
+    column, and the engine can read it unconditionally. The original source
+    columns are preserved alongside, so debugging and fallback stay easy.
+
     Returns `{slug: MergedSource}`. Each MergedSource has:
     - a concatenated DataFrame with a `__source_file` column
     - the list of source labels, in upload order
@@ -405,6 +427,25 @@ def merge_engine_sources(
     `__source_file` column) so downstream code can rely on the column being
     present unconditionally.
     """
+    per_file_overrides = per_file_overrides or {}
+
+    def _apply_overrides(file_key: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Copy mapped source columns into canonical `__map__<field>` columns.
+
+        We COPY instead of rename so the original columns stay visible (useful
+        for debugging and fallback) and so multiple fields can point to the
+        same source column without conflict.
+        """
+        mapping = per_file_overrides.get(file_key) or {}
+        if not mapping:
+            return df
+        out = df.copy()
+        for field, src_col in mapping.items():
+            if not src_col or src_col not in out.columns:
+                continue
+            out[f"__map__{field}"] = out[src_col]
+        return out
+
     # Group by current slug while preserving order.
     groups: dict[str, list[tuple[str, pd.DataFrame]]] = {}
     for key, info in engine_files.items():
@@ -415,6 +456,7 @@ def merge_engine_sources(
         df = info.get("df")
         if df is None:
             continue
+        df = _apply_overrides(key, df)
         groups.setdefault(slug, []).append((label, df))
 
     merged: dict[str, MergedSource] = {}
