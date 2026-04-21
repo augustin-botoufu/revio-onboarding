@@ -40,12 +40,12 @@ API_PLAQUES = pd.DataFrame([
         "marque": "RENAULT",
         "modele": "CLIO",
         "version": "Intens",
-        "energie": "GO",  # diesel
+        "energieNGC": "GO",  # diesel
         "genreVCGNGC": "VP",  # private
         "co2": 105,
-        "puissance_fiscale": 5,
+        "puisFisc": 5,
         "date_premiere_circulation": "2022-03-15",
-        "masse_ordma_min": 1200,
+        "poids": 1200,
         "photo_modele": "https://photos.api/clio.jpg",
     },
     {
@@ -54,12 +54,12 @@ API_PLAQUES = pd.DataFrame([
         "marque": "PEUGEOT",
         "modele": "208",
         "version": "GT",
-        "energie": "EL",  # electric
+        "energieNGC": "EL",  # electric
         "genreVCGNGC": "VP",
         "co2": 0,
-        "puissance_fiscale": 3,
+        "puisFisc": 3,
         "date_premiere_circulation": "2023-07-01",
-        "masse_ordma_min": 1450,
+        "poids": 1450,
         "puissance_nette_max": 100,
         "photo_modele": "https://photos.api/208.jpg",
     },
@@ -69,12 +69,12 @@ API_PLAQUES = pd.DataFrame([
         "marque": "TESLA",
         "modele": "MODEL 3",
         "version": "Long Range",
-        "energie": "EL",
+        "energieNGC": "EL",
         "genreVCGNGC": "VP",
         "co2": 0,
-        "puissance_fiscale": 4,
+        "puisFisc": 4,
         "date_premiere_circulation": "2024-01-10",
-        "masse_ordma_min": 1850,
+        "poids": 1850,
         "puissance_nette_max": 324,
         "photo_modele": "https://photos.api/model3.jpg",
     },

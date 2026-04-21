@@ -150,7 +150,7 @@ def _apply_rule_to_series(
     warnings_by_key: dict[Any, list[str]] = {}
     if col not in source_df.columns:
         # Column declared in rule but missing from uploaded file
-        empty = pd.Series([None] * len(source_df), index=source_df.index)
+        empty = pd.Series([None] * len(source_df), index=source_df.index, dtype=object)
         return empty, {k: ["column missing in uploaded file"] for k in source_df.index}
     values = []
     for key, raw in source_df[col].items():
@@ -158,7 +158,10 @@ def _apply_rule_to_series(
         values.append(val)
         if warns:
             warnings_by_key.setdefault(key, []).extend(warns)
-    return pd.Series(values, index=source_df.index), warnings_by_key
+    # Force object dtype so ints mixed with None stay as ints (pandas otherwise
+    # promotes to float64 because int can't carry NaN, producing '109.0' in
+    # the CSV output instead of '109').
+    return pd.Series(values, index=source_df.index, dtype=object), warnings_by_key
 
 
 def apply_rules(

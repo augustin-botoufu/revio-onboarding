@@ -278,11 +278,11 @@ fields:
     - priority: 1
       source: api_plaques
       source_label: API Plaques
-      column: energie
+      column: energieNGC
       transform: map_siv_motorisation
       transform_doc: 'Map codes SIV: GO→diesel, ES→gas, EL→electric, EH/ES+HY→hybrid'
       example: GO
-      note: Codes officiels SIV
+      note: Codes officiels SIV (colonne `energieNGC` de l'API Plaques)
     - priority: 2
       source: arval_uat
       source_label: Arval - État de parc (UAT)
@@ -366,11 +366,11 @@ fields:
     - priority: 1
       source: api_plaques
       source_label: API Plaques
-      column: masse_ordma_min
+      column: poids
       transform: to_int
       transform_doc: Entier, kg
       example: '1200'
-      note: Masse à vide en ordre de marche
+      note: Masse à vide en ordre de marche (colonne `poids` de l'API Plaques)
     - priority: 2
       source: client_file
       source_label: Fichier véhicules client (interne)
@@ -557,10 +557,11 @@ fields:
     - priority: 1
       source: api_plaques
       source_label: API Plaques
-      column: puissance_fiscale
+      column: puisFisc
       transform: to_int
       transform_doc: Entier
       example: '5'
+      note: Colonne `puisFisc` de l'API Plaques
     - priority: 2
       source: arval_uat
       source_label: Arval - État de parc (UAT)
