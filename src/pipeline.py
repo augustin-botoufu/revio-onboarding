@@ -83,13 +83,19 @@ def load_tabular(file) -> list[tuple[str, pd.DataFrame]]:
         for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
             for sep in (",", ";", "\t"):
                 try:
-                    df = pd.read_csv(io.BytesIO(raw), encoding=enc, sep=sep, dtype=str, keep_default_na=False)
+                    # index_col=False is critical: many lessor CSV exports have a
+                    # trailing separator on data rows (header has N fields, data
+                    # rows have N+1). Without this, pandas silently treats the
+                    # first data column as the row index, shifting every value
+                    # one column to the left — so a "Plaque d'immatriculation"
+                    # header ends up holding VIN values.
+                    df = pd.read_csv(io.BytesIO(raw), encoding=enc, sep=sep, dtype=str, keep_default_na=False, index_col=False)
                     if df.shape[1] > 1:
                         return [("", _normalize_headers_and_values(df))]
                 except Exception:
                     continue
         # Last resort.
-        df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False, engine="python")
+        df = pd.read_csv(io.BytesIO(raw), dtype=str, keep_default_na=False, engine="python", index_col=False)
         return [("", _normalize_headers_and_values(df))]
     if lower.endswith((".xlsx", ".xls", ".xlsm")):
         raw = file.read() if hasattr(file, "read") else open(file, "rb").read()
