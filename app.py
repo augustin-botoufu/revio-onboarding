@@ -454,7 +454,7 @@ def _init_state():
         "mode": "home",             # "home" | "classic" | "engine" | "rules"
         # --- engine mode ---
         "engine_files": {},         # {filename: {"df": DataFrame, "slug": str, "detected": str}}
-        "engine_overrides": {},     # {(slug, field): source_col}
+        "engine_overrides": {},     # {(file_key, field): source_col} — per-FILE mapping
         "engine_result": None,      # EngineResult (dataclass) or None
         # --- rules editor (session-scoped priority overrides) ---
         # Shape: {table_slug: {field_name: [source_slug_in_priority_order]}}
@@ -680,8 +680,14 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
     lessor export). For each such file we offer a Claude-powered
     auto-mapping button plus manual selectboxes per Revio field. Overrides
     are stored in ``st.session_state.engine_overrides`` with the key
-    ``(slug, field_name)`` and consumed by ``rules_engine.run_vehicle`` as
-    a fallback when the YAML rule has no ``column:`` key.
+    ``(file_key, field_name)`` — per-FILE, not per-slug, so two files
+    sharing a slug (e.g. two different `autre_loueur_etat_parc` exports
+    with totally different column headers) can coexist without overwriting
+    each other's mapping. At run time, ``merge_engine_sources`` applies
+    each file's mapping before concat by copying source columns to
+    canonical ``__map__<field>`` names, then the rules engine reads those
+    canonical columns via ``(slug, field) → "__map__<field>"`` in
+    ``manual_column_overrides``.
 
     When the user clicks the IA button we update both the overrides dict
     AND the selectbox widget state keys directly, then call ``st.rerun()``
@@ -753,7 +759,7 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                             widget_key = (
                                 f"engine_override_{slug}_{field_name}_{key}"
                             )
-                            override_key = (slug, field_name)
+                            override_key = (key, field_name)
                             if src_col and src_col in valid_cols:
                                 st.session_state.engine_overrides[
                                     override_key
@@ -882,6 +888,11 @@ def render_engine_page():
                 }
         st.session_state.engine_files = new_files
         st.session_state.engine_result = None  # invalidate previous run
+        # Clear column-mapping overrides from the previous upload batch:
+        # file_keys are specific to this upload and would otherwise linger
+        # as dead keys, and old (slug, field) legacy keys would collide
+        # with the new per-file mapping flow.
+        st.session_state.engine_overrides = {}
         st.session_state.engine_uploaded_sig = current_sig
         st.success(f"{len(new_files)} fichier(s) chargé(s).")
         if _learned_hits:
@@ -1006,10 +1017,40 @@ def render_engine_page():
         )
 
     if st.button("▶️ Appliquer les règles Vehicle", type="primary", use_container_width=True):
+        # 1. Split engine_overrides into two structures:
+        #    - per_file_overrides: {file_key: {field: source_col}} → used by
+        #      merge_engine_sources to rename each file's columns to canonical
+        #      names BEFORE concat (handles the case of 2 files of the same
+        #      slug with different source headers, e.g. "Plaque d'immatriculation"
+        #      vs "Immat.").
+        #    - engine_canonical_overrides: {(slug, field): "__map__<field>"}
+        #      → tells the rules engine to read the canonical merged column
+        #      rather than a specific source header.
+        #  Keys of engine_overrides that aren't a known file_key are kept as-is
+        #  (belt-and-suspenders: lets the old (slug, field) form keep working
+        #  if anything else ever injects it).
+        per_file_overrides: dict[str, dict[str, str]] = {}
+        engine_canonical_overrides: dict[tuple[str, str], str] = {}
+        legacy_slug_overrides: dict[tuple[str, str], str] = {}
+        engine_file_keys = set(engine_files.keys())
+        for (scope, field_name), src_col in st.session_state.engine_overrides.items():
+            if not src_col:
+                continue
+            if scope in engine_file_keys:
+                per_file_overrides.setdefault(scope, {})[field_name] = src_col
+                slug_for_file = engine_files[scope].get("slug")
+                if slug_for_file:
+                    engine_canonical_overrides[(slug_for_file, field_name)] = (
+                        f"__map__{field_name}"
+                    )
+            else:
+                # scope is a slug (legacy path) — keep as-is.
+                legacy_slug_overrides[(scope, field_name)] = src_col
+
         # Concat all files sharing the same slug and tag rows with __source_file
         # for downstream traceability. Single-file slugs go through the same
         # code path so the report can always rely on the column existing.
-        merged = merge_engine_sources(engine_files)
+        merged = merge_engine_sources(engine_files, per_file_overrides=per_file_overrides)
         source_dfs: dict = {slug: ms.df for slug, ms in merged.items()}
 
         # Surface the merges in the UI — if the user dropped two Ayvens files,
@@ -1023,12 +1064,15 @@ def render_engine_page():
         if merge_notes:
             st.info("⇢ **Concaténation auto** — " + "  ·  ".join(merge_notes))
 
-        overrides = dict(st.session_state.engine_overrides)
+        # Canonical overrides take precedence over legacy slug overrides
+        # (canonical columns are guaranteed to exist in the merged df after
+        # the per-file rename; legacy source headers may not).
+        engine_overrides_for_run = {**legacy_slug_overrides, **engine_canonical_overrides}
         try:
             with st.spinner("Application des règles..."):
                 result = rules_engine.run_vehicle(
                     source_dfs,
-                    manual_column_overrides=overrides,
+                    manual_column_overrides=engine_overrides_for_run,
                     priority_overrides=vehicle_overrides or None,
                 )
             st.session_state.engine_result = result
