@@ -105,10 +105,15 @@ def slug_display(slug: str) -> tuple[str, str, int]:
     return SLUG_DISPLAY.get(slug, ("📄", slug, 99))
 
 
-# Fields of the Vehicle schema that need a manual column mapping when the
-# source is `client_file` (no fixed column naming in a client's free-form
-# Excel). We let the user pick the source column for each of these.
-CLIENT_FILE_MAPPABLE_FIELDS = [
+# Fields that need a manual column mapping at upload time. Used for slugs
+# whose column names CAN'T be pre-declared in vehicle.yml, because the
+# format isn't known in advance:
+#   - client_file = client's free-form vehicle spreadsheet
+#   - autre_loueur_etat_parc = unknown lessor export
+# For both slugs, the user (or the AI) fills the source column name per
+# Revio field at runtime. The rules engine picks up these overrides as a
+# fallback when the YAML rule has no `column:` key.
+MANUAL_MAPPABLE_FIELDS = [
     "registrationPlate",
     "usage",
     "parcEntryAt",
@@ -122,6 +127,16 @@ CLIENT_FILE_MAPPABLE_FIELDS = [
     "registrationVin",
     "registrationFiscalPower",
 ]
+
+# Alias kept so other parts of the codebase that reference the old name
+# keep working. Safe to remove once all call sites are migrated.
+CLIENT_FILE_MAPPABLE_FIELDS = MANUAL_MAPPABLE_FIELDS
+
+# Slugs that require a manual column mapping (LLM-assisted or hand-picked)
+# before the rules engine can read anything from the file. All OTHER slugs
+# (ayvens_*, arval_*, api_plaques, …) have their column names baked into
+# vehicle.yml and don't need this step.
+SLUGS_NEEDING_MANUAL_MAPPING = {"client_file", "autre_loueur_etat_parc"}
 
 
 # ========== Page config ==========
@@ -658,12 +673,153 @@ def _render_classic_stepper() -> None:
 
 
 # ========== Engine mode (YAML rules engine, Vehicle only) ==========
+def _render_manual_mapping_section(engine_files: dict) -> None:
+    """Render the column-mapping UI for slugs whose columns aren't baked in YAML.
+
+    Used for `client_file` and any `autre_loueur_etat_parc` file (unknown
+    lessor export). For each such file we offer a Claude-powered
+    auto-mapping button plus manual selectboxes per Revio field. Overrides
+    are stored in ``st.session_state.engine_overrides`` with the key
+    ``(slug, field_name)`` and consumed by ``rules_engine.run_vehicle`` as
+    a fallback when the YAML rule has no ``column:`` key.
+
+    When the user clicks the IA button we update both the overrides dict
+    AND the selectbox widget state keys directly, then call ``st.rerun()``
+    so the selectboxes reflect the new values on the next render (widget
+    state takes precedence over the ``index=`` argument once it exists).
+
+    If no file in ``engine_files`` needs manual mapping, we show the
+    existing fallback info about the parc de référence.
+    """
+    files_to_map = [
+        (key, info)
+        for key, info in engine_files.items()
+        if info.get("slug") in SLUGS_NEEDING_MANUAL_MAPPING
+    ]
+
+    if not files_to_map:
+        st.info(
+            "Aucun fichier à mapper manuellement (pas de `client_file` ni "
+            "d'`autre_loueur_etat_parc`) → le moteur prendra l'union des plaques "
+            "loueurs comme parc de référence (un avertissement apparaîtra dans "
+            "les issues)."
+        )
+        return
+
+    st.markdown("### 3. Mapping des colonnes")
+    st.caption(
+        "Pour les fichiers dont le format n'est pas connu à l'avance "
+        "(`client_file`, `autre_loueur_etat_parc`), on indique quelle colonne "
+        "source correspond à chaque champ Revio. Utilise le bouton IA pour une "
+        "proposition automatique, puis révise au besoin. Les champs non mappés "
+        "seront ignorés pour ce fichier."
+    )
+
+    for key, info in files_to_map:
+        df = info["df"]
+        slug = info["slug"]
+        slug_label = slug_display(slug)[1]
+        cols = [""] + [str(c) for c in df.columns]
+        label = info["filename"] + (
+            f" [{info['sheet_name']}]" if info.get("sheet_name") else ""
+        )
+
+        with st.expander(
+            f"🔗 {label} → {slug_label} — mapping des champs", expanded=True
+        ):
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                if st.button(
+                    "🤖 Proposer un mapping (IA)",
+                    key=f"engine_llm_{key}",
+                    use_container_width=True,
+                ):
+                    with st.spinner("Claude analyse les colonnes..."):
+                        result = propose_mapping(
+                            df,
+                            "vehicle",
+                            st.session_state.get("user_instructions", ""),
+                        )
+                    if "_error" in result:
+                        st.error(result["_error"])
+                    else:
+                        proposed = result.get("mapping", {})
+                        notes = result.get("_notes", [])
+                        debug = result.get("_debug", {})
+                        valid_cols = {str(c) for c in df.columns}
+                        nb_mapped = 0
+                        for field_name in MANUAL_MAPPABLE_FIELDS:
+                            src_col = proposed.get(field_name)
+                            widget_key = (
+                                f"engine_override_{slug}_{field_name}_{key}"
+                            )
+                            override_key = (slug, field_name)
+                            if src_col and src_col in valid_cols:
+                                st.session_state.engine_overrides[
+                                    override_key
+                                ] = src_col
+                                st.session_state[widget_key] = src_col
+                                nb_mapped += 1
+                            else:
+                                # Clear any previous value so the selectbox
+                                # falls back to "" on rerun.
+                                st.session_state.engine_overrides.pop(
+                                    override_key, None
+                                )
+                                st.session_state[widget_key] = ""
+                        if nb_mapped == 0:
+                            st.warning(
+                                "L'IA n'a proposé aucun mapping exploitable. "
+                                "Mappe manuellement ci-dessous."
+                            )
+                        else:
+                            st.success(
+                                f"Mapping proposé : {nb_mapped} champ(s) rempli(s). "
+                                "Révise-le ci-dessous avant de lancer le moteur."
+                            )
+                        if notes:
+                            st.info(
+                                "Notes de l'IA: "
+                                + " / ".join(str(n) for n in notes)
+                            )
+                        if debug:
+                            with st.expander("🔍 Debug IA (pour diagnostic)"):
+                                st.json({"mapping_proposé": proposed, **debug})
+                        st.rerun()
+            with c2:
+                st.caption(
+                    "Colonnes détectées dans le fichier : "
+                    + ", ".join(f"`{c}`" for c in list(df.columns)[:10])
+                    + (" ..." if len(df.columns) > 10 else "")
+                )
+            st.markdown("---")
+            for field_name in MANUAL_MAPPABLE_FIELDS:
+                override_key = (slug, field_name)
+                current = st.session_state.engine_overrides.get(
+                    override_key, ""
+                )
+                if current not in cols:
+                    current = ""
+                picked = st.selectbox(
+                    field_name,
+                    options=cols,
+                    index=cols.index(current),
+                    key=f"engine_override_{slug}_{field_name}_{key}",
+                )
+                if picked:
+                    st.session_state.engine_overrides[override_key] = picked
+                else:
+                    st.session_state.engine_overrides.pop(override_key, None)
+
+
 def render_engine_page():
     st.header("🧪 Moteur de règles — Vehicle (beta)")
     st.caption(
         "Dépose les fichiers reçus pour un client. Le moteur applique les règles "
         "déclarées dans `src/rules/vehicle.yml` et produit le CSV Vehicle Revio. "
-        "Seul le fichier **client** a besoin d'un mapping manuel (ses colonnes sont libres)."
+        "Les fichiers marqués **`client_file`** ou **`autre_loueur_etat_parc`** "
+        "ont besoin d'un mapping manuel (IA + revue) car leurs colonnes ne sont "
+        "pas connues à l'avance."
     )
 
     # --- 1. Upload ---
@@ -830,39 +986,9 @@ def render_engine_page():
                         label_visibility="collapsed",
                     )
 
-    # --- 3. Client file column mapping ---
-    client_files = [(k, info) for k, info in engine_files.items() if info["slug"] == "client_file"]
-    if client_files:
-        st.markdown("### 3. Mapping du fichier client")
-        st.caption(
-            "Les colonnes du fichier client sont libres, on doit donc indiquer laquelle "
-            "correspond à chaque champ Revio. Les champs non mappés seront ignorés pour ce fichier."
-        )
-        for key, info in client_files:
-            df = info["df"]
-            cols = [""] + [str(c) for c in df.columns]
-            label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
-            with st.expander(f"🔗 {label} — mapping des champs", expanded=True):
-                for field_name in CLIENT_FILE_MAPPABLE_FIELDS:
-                    current = st.session_state.engine_overrides.get(("client_file", field_name), "")
-                    if current not in cols:
-                        current = ""
-                    picked = st.selectbox(
-                        field_name,
-                        options=cols,
-                        index=cols.index(current),
-                        key=f"engine_override_client_{field_name}_{key}",
-                    )
-                    override_key = ("client_file", field_name)
-                    if picked:
-                        st.session_state.engine_overrides[override_key] = picked
-                    else:
-                        st.session_state.engine_overrides.pop(override_key, None)
-    else:
-        st.info(
-            "Pas de fichier marqué `client_file` → le moteur prendra l'union des plaques "
-            "loueurs comme parc de référence (un avertissement apparaîtra dans les issues)."
-        )
+    # --- 3. Column mapping for slugs whose columns aren't baked in YAML ---
+    # (client_file + autre_loueur_etat_parc). IA proposes, user reviews.
+    _render_manual_mapping_section(engine_files)
 
     # --- 4. Run ---
     st.markdown("### 4. Lancer le moteur")
