@@ -727,6 +727,143 @@ def _current_user_email() -> str | None:
         return None
 
 
+def _render_column_preview(df, col: str, max_values: int = 15) -> None:
+    """Render a compact preview of a column's values inside a popover.
+
+    Shown when the user clicks the 🔍 button next to a mapping selectbox so
+    they can verify what's actually in the source column without going back
+    to the file. Keeps it snappy: metrics on top, up to ``max_values`` unique
+    samples below, each truncated if longer than 120 chars.
+    """
+    if col not in df.columns:
+        st.warning(f"Colonne `{col}` introuvable dans le fichier.")
+        return
+    s = df[col]
+    total = int(len(s))
+    non_null = int(s.notna().sum())
+    nulls = total - non_null
+    try:
+        uniques = (
+            s.dropna()
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .unique()
+        )
+    except Exception:
+        uniques = [str(v) for v in s.dropna().unique()]
+    n_unique = int(len(uniques))
+
+    st.markdown(f"**Colonne `{col}`**")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Valeurs", total)
+    m2.metric("Uniques", n_unique)
+    m3.metric("Vides", nulls)
+
+    if n_unique == 0:
+        st.info("Cette colonne est entièrement vide.")
+        return
+
+    shown = list(uniques[:max_values])
+    truncated = n_unique > max_values
+    st.caption(
+        f"Aperçu ({len(shown)}/{n_unique} valeurs uniques)"
+        + (" — tronqué" if truncated else "")
+        + " :"
+    )
+    for v in shown:
+        v_str = str(v)
+        if len(v_str) > 120:
+            v_str = v_str[:117] + "..."
+        st.markdown(f"- `{v_str}`")
+
+
+def _render_recognized_card(key: str, info: dict) -> None:
+    """Render one compact card in the 'Fichiers reconnus automatiquement' zone.
+
+    Read-only view by default (title + summary + 👁️ Voir popover). Two
+    action buttons on the right: « ✏️ Modifier » flips the file into edit
+    mode (it reappears in the full mapping UI below on next rerun) and
+    « 🗑️ » removes the pattern from GitHub (same call as the in-card
+    delete button, short-circuited here for convenience).
+    """
+    learned_id = info.get("learned_match_id")
+    learned_hint = info.get("learned_match_hint")
+    mapping_applied = int(info.get("learned_mapping_applied_count") or 0)
+    slug_label = slug_display(info["slug"])[1]
+    label = info["filename"] + (
+        f" [{info['sheet_name']}]" if info.get("sheet_name") else ""
+    )
+    current_mapping = {
+        fld: src_col
+        for (fk, fld), src_col in st.session_state.engine_overrides.items()
+        if fk == key and src_col
+    }
+
+    with st.container(border=True):
+        c_title, c_view, c_edit, c_del = st.columns([6, 2, 2, 1])
+        with c_title:
+            st.markdown(f"**🧠 {label}** → {slug_label}")
+            hint_suffix = f" · loueur *{learned_hint}*" if learned_hint else ""
+            st.caption(
+                f"Pattern `{learned_id}`{hint_suffix} · "
+                f"{mapping_applied} champ(s) mappé(s)"
+            )
+        with c_view:
+            with st.popover(
+                "👁️ Voir",
+                use_container_width=True,
+                help="Voir le mapping actif sans le modifier",
+            ):
+                st.markdown(f"**Mapping actif — `{label}`**")
+                if not current_mapping:
+                    st.caption("Aucun champ mappé.")
+                else:
+                    for fld, src in current_mapping.items():
+                        st.markdown(f"- **{fld}** ← `{src}`")
+        with c_edit:
+            if st.button(
+                "✏️ Modifier",
+                key=f"engine_edit_recognized_btn_{key}",
+                use_container_width=True,
+                help="Rouvre la carte de mapping complète pour ajuster les champs",
+            ):
+                st.session_state[f"engine_edit_recognized_{key}"] = True
+                st.rerun()
+        with c_del:
+            del_disabled = not (gh.is_configured() and learned_id)
+            if st.button(
+                "🗑️",
+                key=f"engine_del_recognized_btn_{key}",
+                use_container_width=True,
+                disabled=del_disabled,
+                help=(
+                    "Configure GitHub dans la sidebar pour activer la suppression."
+                    if del_disabled
+                    else f"Supprimer le pattern `{learned_id}` sur GitHub"
+                ),
+            ):
+                try:
+                    resp = gh.delete_pattern(
+                        learned_id,
+                        author_email=_current_user_email(),
+                    )
+                    if resp.get("skipped"):
+                        st.warning(
+                            f"Le pattern `{learned_id}` n'existait "
+                            "plus sur GitHub — rien à supprimer."
+                        )
+                    else:
+                        st.success(
+                            f"✅ Pattern `{learned_id}` supprimé sur "
+                            "GitHub. Streamlit va redéployer dans ~1 min — "
+                            "recharge la page après."
+                        )
+                except gh.GitHubSyncError as e:
+                    st.error(f"❌ {e.user_message}")
+
+
 def _render_manual_mapping_section(engine_files: dict) -> None:
     """Render the column-mapping UI for slugs whose columns aren't baked in YAML.
 
@@ -766,16 +903,68 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
         )
         return
 
-    st.markdown("### 3. Mapping des colonnes")
-    st.caption(
-        "Pour les fichiers dont le format n'est pas connu à l'avance "
-        "(`client_file`, `autre_loueur_etat_parc`), on indique quelle colonne "
-        "source correspond à chaque champ Revio. Utilise le bouton IA pour une "
-        "proposition automatique, puis révise au besoin. Les champs non mappés "
-        "seront ignorés pour ce fichier."
-    )
+    # Partition: fichiers reconnus par la mémoire ET non ré-ouverts pour
+    # édition ET sans pattern en attente de confirmation → zone compacte
+    # en haut. Les autres → pleine UI de mapping.
+    recognized_auto: list = []
+    needs_action: list = []
+    for _key, _info in files_to_map:
+        _lid = _info.get("learned_match_id")
+        _applied = int(_info.get("learned_mapping_applied_count") or 0)
+        _edit_mode = st.session_state.get(f"engine_edit_recognized_{_key}", False)
+        _has_pending = (
+            st.session_state.get(f"engine_pending_pattern_{_key}") is not None
+        )
+        if _lid and _applied > 0 and not _edit_mode and not _has_pending:
+            recognized_auto.append((_key, _info))
+        else:
+            needs_action.append((_key, _info))
 
-    for key, info in files_to_map:
+    st.markdown("### 3. Mapping des colonnes")
+    if recognized_auto and not needs_action:
+        st.caption(
+            "Tous tes fichiers ont été reconnus automatiquement grâce à la "
+            "mémoire 🧠. Tu peux lancer le moteur directement, ou rouvrir un "
+            "fichier ci-dessous si tu veux ajuster son mapping."
+        )
+    elif recognized_auto:
+        st.caption(
+            "Certains fichiers ont été reconnus automatiquement (zone repliée "
+            "juste en dessous). Les autres attendent un mapping manuel."
+        )
+    else:
+        st.caption(
+            "Pour les fichiers dont le format n'est pas connu à l'avance "
+            "(`client_file`, `autre_loueur_etat_parc`), on indique quelle "
+            "colonne source correspond à chaque champ Revio. Utilise le "
+            "bouton IA pour une proposition automatique, puis révise au "
+            "besoin. Les champs non mappés seront ignorés pour ce fichier."
+        )
+
+    # ---- Zone compacte : fichiers reconnus automatiquement ----
+    if recognized_auto:
+        n_reco = len(recognized_auto)
+        with st.expander(
+            f"✅ Fichiers reconnus automatiquement ({n_reco}) — aucune action requise",
+            expanded=False,
+        ):
+            st.caption(
+                "Ces fichiers ont été reconnus par la mémoire 🧠. "
+                "« 👁️ Voir » affiche le mapping appliqué, "
+                "« ✏️ Modifier » rouvre la carte complète, "
+                "« 🗑️ » supprime le pattern sur GitHub."
+            )
+            for _rkey, _rinfo in recognized_auto:
+                _render_recognized_card(_rkey, _rinfo)
+
+    # ---- Pleine UI : fichiers à mapper (ou rouverts pour édition) ----
+    if not needs_action:
+        return
+
+    if recognized_auto:
+        st.markdown("#### ✏️ Fichiers à mapper")
+
+    for key, info in needs_action:
         df = info["df"]
         slug = info["slug"]
         slug_label = slug_display(slug)[1]
@@ -795,10 +984,28 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
             else ""
         )
 
+        edit_mode = st.session_state.get(f"engine_edit_recognized_{key}", False)
+
         with st.expander(
             f"🔗 {label} → {slug_label} — mapping des champs{memory_badge}",
             expanded=True,
         ):
+            if edit_mode:
+                ce_left, ce_right = st.columns([5, 1])
+                with ce_left:
+                    st.caption(
+                        "Mode édition : tu modifies le mapping actif. "
+                        "Clique sur « Refermer » pour revenir à la zone compacte sans rien toucher."
+                    )
+                with ce_right:
+                    if st.button(
+                        "↩️ Refermer",
+                        key=f"engine_exit_edit_{key}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.pop(f"engine_edit_recognized_{key}", None)
+                        st.rerun()
+
             if learned_id and mapping_applied > 0:
                 st.caption(
                     f"🧠 Format reconnu : `{learned_id}`"
@@ -1056,12 +1263,29 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                 )
                 if current not in cols:
                     current = ""
-                picked = st.selectbox(
-                    field_name,
-                    options=cols,
-                    index=cols.index(current),
-                    key=f"engine_override_{slug}_{field_name}_{key}",
-                )
+                # Layout : selectbox + bouton 🔍 aligné en bas pour peek
+                # les valeurs de la colonne source sans quitter la page.
+                c_sel, c_peek = st.columns([15, 1], vertical_alignment="bottom")
+                with c_sel:
+                    picked = st.selectbox(
+                        field_name,
+                        options=cols,
+                        index=cols.index(current),
+                        key=f"engine_override_{slug}_{field_name}_{key}",
+                    )
+                with c_peek:
+                    with st.popover(
+                        "🔍",
+                        help="Aperçu des valeurs de la colonne source",
+                        use_container_width=True,
+                    ):
+                        if picked:
+                            _render_column_preview(df, picked)
+                        else:
+                            st.caption(
+                                "Sélectionne d'abord une colonne source pour "
+                                "voir un aperçu des valeurs."
+                            )
                 if picked:
                     st.session_state.engine_overrides[override_key] = picked
                 else:
@@ -1103,6 +1327,18 @@ def render_engine_page():
         # batch would linger otherwise. We re-populate below for any file
         # that matches a learned pattern with a stored column_mapping.
         st.session_state.engine_overrides = {}
+        # Clear any per-file "edit mode" flags from the previous upload batch
+        # (Jalon 2.6) and any lingering pending-pattern previews — otherwise
+        # stale keys would keep phantom cards open across different files.
+        for _stale_key in [
+            k for k in list(st.session_state.keys())
+            if isinstance(k, str) and (
+                k.startswith("engine_edit_recognized_")
+                or k.startswith("engine_pending_pattern_")
+                or k.startswith("engine_snippet_")
+            )
+        ]:
+            st.session_state.pop(_stale_key, None)
         # Load the learned-patterns memory once per upload batch. Used as a
         # fallback when the hard-coded detector can't identify a file — typical
         # case: a new lessor's "état de parc" whose signature we memorised on
