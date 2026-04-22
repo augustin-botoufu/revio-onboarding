@@ -37,6 +37,8 @@ from src import learned_patterns as lp
 from src import github_sync as gh
 from src import value_mappings as vm
 from src import ai_normalization as ain
+from src import fleet_segmentation as fseg
+from src import zip_writer as zw
 from src.excel_report import build_report_xlsx
 
 
@@ -463,6 +465,13 @@ def _init_state():
         # Cached once per session — reused across engine runs, AI fallback, and UI.
         "value_mappings": None,     # dict[str, dict[str, vm.ValueMapping]] or None
         "ai_fallback_report": None, # AIFallbackReport of the last engine run
+        # --- fleet segmentation (Jalon 3.0) ---
+        # Session-scoped FleetMapping (or None). Lives here so the popup
+        # can be re-opened with the previous choices preselected.
+        "engine_fleet_mapping": None,  # fleet_segmentation.FleetMapping or None
+        # Scratch area used by the @st.dialog while the user edits the
+        # mapping. Flushed to engine_fleet_mapping only on « Valider ».
+        "fleet_dialog_draft": None,    # dict with keys: file_key, column, raw_to_fleet
         # --- rules editor (session-scoped priority overrides) ---
         # Shape: {table_slug: {field_name: [source_slug_in_priority_order]}}
         "rules_overrides": {},
@@ -1387,6 +1396,212 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                     st.session_state.engine_overrides.pop(override_key, None)
 
 
+# ========== Fleet segmentation (Jalon 3.0) ==========
+
+def _fleet_default_file_key(engine_files: dict) -> "str | None":
+    """Preselect the most likely « fichier client » file for the dialog.
+
+    Order of preference:
+    1. Slug == ``client_file`` (the intended source per spec)
+    2. Slug == ``autre_loueur_etat_parc`` (close enough, often used as fallback)
+    3. First file in the dict
+    """
+    if not engine_files:
+        return None
+    for preferred in ("client_file", "autre_loueur_etat_parc"):
+        for k, meta in engine_files.items():
+            if meta.get("slug") == preferred:
+                return k
+    return next(iter(engine_files))
+
+
+def _fleet_badge_text(mapping) -> str:
+    """Short human-readable status text for the badge next to the button."""
+    if mapping is None or not mapping.is_active:
+        return "Aucune segmentation — 1 seul fichier de sortie."
+    names = mapping.fleet_names
+    counts = mapping.counts_by_fleet()
+    detail = ", ".join(
+        f"**{n}** ({counts.get(n, 0)})" for n in names
+    )
+    return f"**{len(names)} flotte(s)** : {detail}"
+
+
+@st.dialog("🏢 Segmenter en flottes", width="large")
+def _fleet_segmentation_dialog():
+    """Popup for configuring the per-import fleet mapping.
+
+    Flow:
+    1. Pick the source file (defaults to the detected « fichier client »).
+    2. Pick the column that carries the agency / cost-centre code.
+    3. Review the unique values + type the display name for each.
+       Two raw values mapped to the same display name = they're merged.
+       Empty cells surface as « (vide) » so the user never loses rows.
+    4. Validate → we build a FleetMapping and stash it in session_state.
+    """
+    engine_files: dict = st.session_state.engine_files or {}
+    if not engine_files:
+        st.warning("Charge d'abord au moins un fichier dans l'étape 1.")
+        return
+
+    st.caption(
+        "Choisis **le fichier** et **la colonne** qui portent le nom "
+        "de l'agence / du centre de coût. Tu pourras ensuite renommer / "
+        "fusionner / ignorer chaque valeur brute."
+    )
+
+    # --- 1. File picker -----------------------------------------------------
+    draft = st.session_state.fleet_dialog_draft or {}
+    file_keys = list(engine_files.keys())
+    labels = [
+        f"{engine_files[k].get('filename', k)} · slug={engine_files[k].get('slug', '?')}"
+        for k in file_keys
+    ]
+    default_key = (
+        draft.get("file_key")
+        or (st.session_state.engine_fleet_mapping.source_file_key
+            if st.session_state.engine_fleet_mapping else None)
+        or _fleet_default_file_key(engine_files)
+    )
+    try:
+        default_idx = file_keys.index(default_key) if default_key in file_keys else 0
+    except ValueError:
+        default_idx = 0
+    picked_idx = st.selectbox(
+        "Fichier source",
+        options=list(range(len(file_keys))),
+        format_func=lambda i: labels[i],
+        index=default_idx,
+        key="fleet_dialog_file_idx",
+    )
+    file_key = file_keys[picked_idx]
+    source_df: pd.DataFrame = engine_files[file_key]["df"]
+
+    # --- 2. Column picker ---------------------------------------------------
+    all_cols = list(source_df.columns)
+    if not all_cols:
+        st.error("Ce fichier n'a aucune colonne lisible.")
+        return
+    suggested = fseg.suggest_agency_columns(source_df)
+    default_col = (
+        draft.get("column")
+        or (st.session_state.engine_fleet_mapping.source_column
+            if st.session_state.engine_fleet_mapping
+            and st.session_state.engine_fleet_mapping.source_file_key == file_key
+            else None)
+        or (suggested[0] if suggested else all_cols[0])
+    )
+    try:
+        default_col_idx = all_cols.index(default_col) if default_col in all_cols else 0
+    except ValueError:
+        default_col_idx = 0
+    picked_col = st.selectbox(
+        "Colonne « agence »",
+        options=all_cols,
+        index=default_col_idx,
+        key="fleet_dialog_col",
+        help="Colonne qui contient le nom / code de l'agence ou du centre de coût.",
+    )
+    if suggested and picked_col in suggested:
+        st.caption(f"💡 Colonne suggérée parmi `{', '.join(suggested)}`.")
+    elif suggested:
+        st.caption(f"💡 Suggestions si besoin : `{', '.join(suggested)}`.")
+
+    # --- 3. Unique values table --------------------------------------------
+    uniques = fseg.unique_values_in_column(source_df, picked_col)
+    if not uniques:
+        st.warning("Cette colonne est vide ou introuvable.")
+        return
+
+    st.markdown("---")
+    st.markdown(f"#### 🗂️ Valeurs uniques — {len(uniques)} trouvée(s)")
+    st.caption(
+        "Tape le **nom de la flotte** à droite. Deux valeurs brutes qui "
+        "pointent vers le **même nom** seront **fusionnées**. Laisse un nom "
+        "**vide** pour **ignorer** ces lignes (elles n'iront dans aucune flotte)."
+    )
+
+    # Build / restore the working raw_to_fleet dict.
+    existing = (
+        st.session_state.engine_fleet_mapping.raw_to_fleet
+        if st.session_state.engine_fleet_mapping
+        and st.session_state.engine_fleet_mapping.source_file_key == file_key
+        and st.session_state.engine_fleet_mapping.source_column == picked_col
+        else {}
+    )
+    working = dict(draft.get("raw_to_fleet") or existing)
+
+    header = st.columns([4, 1, 5])
+    header[0].markdown("**Valeur brute (fichier)**")
+    header[1].markdown("**Lignes**")
+    header[2].markdown("**Nom de la flotte**")
+
+    for idx, (raw, count) in enumerate(uniques):
+        c1, c2, c3 = st.columns([4, 1, 5])
+        is_empty = raw == fseg.EMPTY_RAW_KEY
+        display_raw = "(vide)" if is_empty else raw
+        with c1:
+            if is_empty:
+                st.markdown(f"_(cellule vide)_")
+            else:
+                st.markdown(f"`{display_raw}`")
+        with c2:
+            st.markdown(f"{count}")
+        with c3:
+            default_value = working.get(raw, "" if is_empty else raw)
+            new_val = st.text_input(
+                f"flotte_{idx}",
+                value=default_value,
+                key=f"fleet_dlg_{file_key}_{picked_col}_{idx}",
+                label_visibility="collapsed",
+                placeholder=("Laisser vide pour ignorer" if is_empty
+                             else "ex. Bordeaux"),
+            )
+            working[raw] = new_val
+
+    # --- Live preview -------------------------------------------------------
+    non_empty_targets = [v for v in working.values() if v and v.strip()]
+    unique_fleets = sorted(set(v.strip() for v in non_empty_targets))
+    st.markdown("---")
+    p1, p2, p3 = st.columns(3)
+    p1.metric("Flottes distinctes", len(unique_fleets))
+    p2.metric("Valeurs mappées", len(non_empty_targets))
+    p3.metric("Valeurs ignorées", len(uniques) - len(non_empty_targets))
+
+    # --- Actions ------------------------------------------------------------
+    a1, a2, a3 = st.columns([1, 1, 1])
+    with a1:
+        if st.button("✅ Valider", type="primary", use_container_width=True,
+                     key="fleet_dlg_validate"):
+            mapping = fseg.build_fleet_mapping(
+                source_file_key=file_key,
+                source_column=picked_col,
+                raw_to_fleet={k: (v or "").strip() for k, v in working.items()},
+                source_df=source_df,
+            )
+            st.session_state.engine_fleet_mapping = mapping
+            st.session_state.fleet_dialog_draft = None
+            st.rerun()
+    with a2:
+        if st.button("🧹 Réinitialiser", use_container_width=True,
+                     key="fleet_dlg_reset"):
+            st.session_state.engine_fleet_mapping = None
+            st.session_state.fleet_dialog_draft = None
+            st.rerun()
+    with a3:
+        if st.button("Annuler", use_container_width=True, key="fleet_dlg_cancel"):
+            st.session_state.fleet_dialog_draft = None
+            st.rerun()
+
+    # Remember the in-flight edits so reopening the dialog doesn't lose them
+    # (the dialog closes between reruns unless we stash the draft).
+    st.session_state.fleet_dialog_draft = {
+        "file_key": file_key,
+        "column": picked_col,
+        "raw_to_fleet": working,
+    }
+
+
 def render_engine_page():
     st.header("🧪 Moteur de règles — Vehicle (beta)")
     st.caption(
@@ -1614,6 +1829,25 @@ def render_engine_page():
             "cf. *⚙️ Règles d'import* dans le menu de gauche."
         )
 
+    # --- Fleet segmentation (Jalon 3.0) — optional, doesn't affect engine run,
+    # only how the output gets sliced at download time.
+    current_fleet_mapping = st.session_state.get("engine_fleet_mapping")
+    fc1, fc2 = st.columns([1, 2])
+    with fc1:
+        if st.button(
+            "🏢 Segmenter en flottes",
+            use_container_width=True,
+            help="Découper l'export en un fichier par agence / centre de coût.",
+            key="fleet_open_dialog",
+        ):
+            _fleet_segmentation_dialog()
+    with fc2:
+        st.markdown(
+            f"<div style='padding-top:0.55rem;color:#374151;'>"
+            f"🏢 {_fleet_badge_text(current_fleet_mapping)}</div>",
+            unsafe_allow_html=True,
+        )
+
     if st.button("▶️ Appliquer les règles Vehicle", type="primary", use_container_width=True):
         # 1. Split engine_overrides into two structures:
         #    - per_file_overrides: {file_key: {field: source_col}} → used by
@@ -1757,32 +1991,52 @@ def render_engine_page():
     if not result.conflicts_by_cell and not result.issues and orphan_count == 0:
         st.success("Aucune anomalie — toutes les sources se sont bien alignées ✅")
 
-    # --- 6. Download ---
+    # --- 6. Download — one zip, everything inside ---
     st.markdown("### 6. Exports")
     client_name = st.session_state.client_name or "client"
-    csv_bytes = df.reset_index(drop=True).to_csv(index=False, sep=";", encoding="utf-8").encode("utf-8")
-    c1, c2 = st.columns(2)
-    with c1:
+    fleet_mapping = st.session_state.get("engine_fleet_mapping")
+
+    # Summary line above the button so the user knows what they're about to get.
+    n_all = len(df)
+    if fleet_mapping is not None and fleet_mapping.is_active:
+        counts = fleet_mapping.counts_by_fleet()
+        detail = " · ".join(f"{n} ({counts.get(n, 0)})" for n in fleet_mapping.fleet_names)
+        st.caption(
+            f"📦 Le pack contiendra : **1 fichier global** ({n_all} véhicules) + "
+            f"**{len(fleet_mapping.fleet_names)} fichiers par flotte** ({detail}) + "
+            "le rapport Excel + un classeur maître multi-onglets."
+        )
+    else:
+        st.caption(
+            f"📦 Le pack contiendra : **1 fichier global** ({n_all} véhicules) + "
+            "le rapport Excel + un classeur maître à un onglet. "
+            "Clique sur *🏢 Segmenter en flottes* plus haut si tu veux un fichier par agence."
+        )
+
+    # Build the report xlsx best-effort so failures don't block the download.
+    try:
+        report_bytes = build_report_xlsx(result, client_name=client_name)
+    except Exception as e:
+        report_bytes = None
+        st.warning(f"Rapport Excel indisponible : {e}")
+
+    try:
+        zip_bytes, zip_name = zw.build_output_zip(
+            client_name=client_name,
+            vehicle_df=df,
+            vehicle_fleet_mapping=fleet_mapping,
+            report_xlsx_bytes=report_bytes,
+        )
         st.download_button(
-            "⬇️ Télécharger vehicle.csv (Revio)",
-            data=csv_bytes,
-            file_name=f"vehicle_{client_name}.csv",
-            mime="text/csv",
+            "📦 Télécharger le pack d'import (.zip)",
+            data=zip_bytes,
+            file_name=zip_name,
+            mime="application/zip",
             type="primary",
             use_container_width=True,
         )
-    with c2:
-        try:
-            xlsx_bytes = build_report_xlsx(result, client_name=client_name)
-            st.download_button(
-                "⬇️ Télécharger rapport.xlsx (sources / anomalies / orphelines)",
-                data=xlsx_bytes,
-                file_name=f"rapport_{client_name}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-        except Exception as e:
-            st.error(f"Impossible de construire le rapport Excel : {e}")
+    except Exception as e:
+        st.error(f"Impossible de construire le zip : {e}")
 
 
 # ========== Rules editor page ==========
