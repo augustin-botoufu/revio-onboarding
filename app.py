@@ -35,6 +35,8 @@ from src import rules_engine
 from src import rules_io
 from src import learned_patterns as lp
 from src import github_sync as gh
+from src import value_mappings as vm
+from src import ai_normalization as ain
 from src.excel_report import build_report_xlsx
 
 
@@ -457,6 +459,10 @@ def _init_state():
         "engine_files": {},         # {filename: {"df": DataFrame, "slug": str, "detected": str}}
         "engine_overrides": {},     # {(file_key, field): source_col} — per-FILE mapping
         "engine_result": None,      # EngineResult (dataclass) or None
+        # --- value normalization (Jalon 2.7) ---
+        # Cached once per session — reused across engine runs, AI fallback, and UI.
+        "value_mappings": None,     # dict[str, dict[str, vm.ValueMapping]] or None
+        "ai_fallback_report": None, # AIFallbackReport of the last engine run
         # --- rules editor (session-scoped priority overrides) ---
         # Shape: {table_slug: {field_name: [source_slug_in_priority_order]}}
         "rules_overrides": {},
@@ -481,6 +487,7 @@ NAV_ITEMS = [
     ("classic", "📥",  "Import — Flow classique"),
     ("engine",  "🧪",  "Import — Moteur de règles"),
     ("rules",   "⚙️",  "Règles d'import"),
+    ("normal",  "🧭",  "Normalisation"),
 ]
 
 with st.sidebar:
@@ -862,6 +869,94 @@ def _render_recognized_card(key: str, info: dict) -> None:
                         )
                 except gh.GitHubSyncError as e:
                     st.error(f"❌ {e.user_message}")
+
+
+def _render_normalizations_report(result, ai_report) -> None:
+    """Report tab for Jalon 2.7 value-level normalization.
+
+    Shows 3 sub-sections:
+    - ✅ Valeurs normalisées via le dictionnaire (cache hits — validated)
+    - 🤖 Proposées par l'IA (pending — click to validate)
+    - ❓ Valeurs inconnues (cache + IA miss)
+
+    Nothing here if the engine didn't touch any enum field (no noise when
+    the user's files are already clean).
+    """
+    if result is None:
+        return
+    hits = dict(result.value_mapping_hits or {})
+    unresolved = dict(result.unresolved_enums or {})
+    # After AI fallback, resolved cells have been removed from unresolved
+    # (they moved to hits as pending) — recompute here to be safe in case
+    # the AI report is stale.
+    if not hits and not unresolved and (ai_report is None or not ai_report.errors):
+        return
+
+    st.markdown("#### 🧭 Normalisations")
+    st.caption(
+        "Les valeurs brutes (VP/VU, Essence, Hybride-diesel, Oui/Non…) qui ont été "
+        "transposées vers les valeurs canoniques Revio (private/utility/service, "
+        "diesel/gas/hybrid/electric, TRUE/FALSE…). "
+        "Les propositions en attente sont à valider dans la page « 🧭 Normalisation »."
+    )
+
+    # Split hits by status so we can highlight the pending ones that need review.
+    validated_hits: list[dict] = []
+    pending_hits: list[dict] = []
+    for (plate, fname), (raw, target, status) in hits.items():
+        row = {
+            "plaque": plate,
+            "champ": fname,
+            "valeur source": raw,
+            "→ valeur Revio": target,
+        }
+        if status == vm.STATUS_PENDING:
+            pending_hits.append(row)
+        else:
+            validated_hits.append(row)
+
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("✅ Dictionnaire", len(validated_hits))
+    col_b.metric("🤖 IA (en attente)", len(pending_hits))
+    col_c.metric("❓ Inconnues", len(unresolved))
+
+    if ai_report and ai_report.errors:
+        for (schema, fname), msg in ai_report.errors.items():
+            st.warning(f"IA indisponible pour `{schema}.{fname}` — {msg}")
+
+    if pending_hits:
+        st.markdown("**🤖 Propositions IA — à valider**")
+        st.caption(
+            "Appliquées automatiquement pour ne pas vider la cellule. "
+            "Valide / corrige depuis la page « 🧭 Normalisation » (sidebar)."
+        )
+        st.dataframe(
+            pd.DataFrame(pending_hits),
+            use_container_width=True, hide_index=True,
+        )
+
+    if unresolved:
+        st.markdown("**❓ Valeurs inconnues — ni règle ni IA**")
+        unresolved_rows = [
+            {"plaque": plate, "champ": fname,
+             "schéma": schema, "valeur": raw}
+            for (plate, fname), (schema, raw) in unresolved.items()
+        ]
+        st.dataframe(
+            pd.DataFrame(unresolved_rows),
+            use_container_width=True, hide_index=True,
+        )
+        st.info(
+            "Ces cellules conservent leur valeur brute en sortie. "
+            "Ajoute une correspondance manuelle depuis la page « 🧭 Normalisation »."
+        )
+
+    if validated_hits and not pending_hits and not unresolved:
+        with st.expander(f"✅ {len(validated_hits)} valeur(s) normalisée(s) sans intervention"):
+            st.dataframe(
+                pd.DataFrame(validated_hits),
+                use_container_width=True, hide_index=True,
+            )
 
 
 def _render_manual_mapping_section(engine_files: dict) -> None:
@@ -1573,15 +1668,57 @@ def render_engine_page():
         engine_overrides_for_run = {**legacy_slug_overrides, **engine_canonical_overrides}
         try:
             with st.spinner("Application des règles..."):
+                # Load value mappings ONCE per session and reuse the same dict
+                # across runs, so AI-proposed pending entries accumulate until
+                # the user validates or the page reloads.
+                if st.session_state.value_mappings is None:
+                    st.session_state.value_mappings = vm.load()
                 result = rules_engine.run_vehicle(
                     source_dfs,
                     manual_column_overrides=engine_overrides_for_run,
                     priority_overrides=vehicle_overrides or None,
+                    value_mappings=st.session_state.value_mappings,
                 )
+            # Jalon 2.7 — automatic AI fallback for cells the cache couldn't
+            # normalize. Best effort: any error surfaces in the report but
+            # doesn't fail the engine result.
+            ai_report = None
+            if result.unresolved_enums:
+                with st.spinner(
+                    f"Normalisation IA de {len(result.unresolved_enums)} valeur(s) inconnue(s)..."
+                ):
+                    ai_report = ain.run_ai_fallback(
+                        st.session_state.value_mappings,
+                        result.unresolved_enums,
+                        df=result.df,
+                        orphan_df=result.orphan_df,
+                        user_email=st.session_state.get("current_user") or None,
+                        value_mapping_hits=result.value_mapping_hits,
+                    )
+                # Best-effort GitHub auto-commit of the newly proposed
+                # pending entries — only if anything was actually upserted
+                # and GitHub is configured.
+                if ai_report and ai_report.total_proposed > 0 and gh.is_configured():
+                    try:
+                        yaml_text = vm.dump_yaml(st.session_state.value_mappings)
+                        gh.save_value_mappings_yaml(
+                            yaml_text,
+                            commit_message=(
+                                f"value_mappings: +{ai_report.total_proposed} "
+                                f"pending via AI fallback"
+                            ),
+                            author_email=st.session_state.get("current_user") or None,
+                        )
+                    except Exception as _gh_err:
+                        # Silent for now; the « 🧭 Normalisation » page will
+                        # show the un-committed state.
+                        pass
             st.session_state.engine_result = result
+            st.session_state.ai_fallback_report = ai_report
         except Exception as e:
             st.error(f"Erreur moteur: {e}")
             st.session_state.engine_result = None
+            st.session_state.ai_fallback_report = None
 
     # --- 5. Result ---
     result = st.session_state.engine_result
@@ -1613,6 +1750,9 @@ def render_engine_page():
             "`plaques_orphelines` du rapport Excel."
         )
         st.dataframe(result.orphan_df, use_container_width=True)
+
+    # --- 5.b Normalisations (Jalon 2.7) ----------------------------------
+    _render_normalizations_report(result, st.session_state.ai_fallback_report)
 
     if not result.conflicts_by_cell and not result.issues and orphan_count == 0:
         st.success("Aucune anomalie — toutes les sources se sont bien alignées ✅")
@@ -1713,6 +1853,281 @@ def render_rules_page():
                     f"Les règles **{meta['label']}** seront disponibles dans une prochaine "
                     "version. Aujourd'hui, seule la table Véhicules est câblée au moteur."
                 )
+
+
+# ========== Normalisation page — value-level mapping dictionary ==========
+def render_normalization_page():
+    """Editor for ``src/rules/value_mappings.yml``.
+
+    Shows one expander per enum-typed field (Usage, Motorisation, booleans, ...),
+    each listing its raw → canonical entries. For every row the user can:
+    - ✅ validate a pending IA proposition (status pending → validated),
+    - ✏️ change the canonical target (dropdown in allowed_values),
+    - 🗑️ delete the entry,
+    - ➕ add a brand-new mapping via the per-field form.
+
+    All edits mutate ``st.session_state.value_mappings`` in place. The
+    « 💾 Sauvegarder sur GitHub » button serializes the dict via
+    ``vm.dump_yaml`` and pushes it through ``gh.save_value_mappings_yaml``.
+    """
+    st.header("🧭 Normalisation des valeurs")
+    st.caption(
+        "Dictionnaire qui transforme les valeurs brutes des fichiers clients "
+        "(VP/VU, Essence, Hybride-diesel, Oui/Non…) en valeurs canoniques Revio "
+        "(private/utility, diesel/gas/hybrid/electric, TRUE/FALSE…). "
+        "Les propositions **IA en attente** sont appliquées tout de suite mais "
+        "attendent ta validation avant d'être réutilisées sans doute."
+    )
+
+    # Lazy-load the dict from disk on first visit.
+    if st.session_state.get("value_mappings") is None:
+        st.session_state.value_mappings = vm.load()
+    mappings: dict = st.session_state.value_mappings
+
+    # --- Collect every enum-typed field defined in SCHEMAS ---
+    # Used to (a) show empty buckets when a field has no entry yet,
+    # (b) bound the « target » selectors to valid allowed_values.
+    enum_fields = vm.iter_enum_fields(SCHEMAS)  # list of (schema, field, allowed)
+    allowed_by_fkey: dict[str, list[str]] = {
+        vm.field_key(sc, fn): vals for (sc, fn, vals) in enum_fields
+    }
+
+    # --- Global stats bar ---
+    stats = vm.stats_by_field(mappings)
+    total_validated = sum(s.get(vm.STATUS_VALIDATED, 0) for s in stats.values())
+    total_pending = sum(s.get(vm.STATUS_PENDING, 0) for s in stats.values())
+    total_fields = len(allowed_by_fkey)
+
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
+    c1.metric("✅ Validées", total_validated)
+    c2.metric("🤖 En attente", total_pending)
+    c3.metric("Champs enum", total_fields)
+    with c4:
+        st.write("")  # vertical align with metrics
+        if st.button(
+            "💾 Sauvegarder sur GitHub",
+            type="primary",
+            use_container_width=True,
+            disabled=not gh.is_configured(),
+            help=(
+                "Commit le dictionnaire dans le repo GitHub pour qu'il soit "
+                "partagé avec les autres utilisateurs."
+                if gh.is_configured()
+                else "GitHub non configuré — les secrets TOKEN/REPO sont absents."
+            ),
+        ):
+            try:
+                yaml_text = vm.dump_yaml(mappings)
+                gh.save_value_mappings_yaml(
+                    yaml_text,
+                    commit_message=(
+                        f"value_mappings: manual edit — {total_validated} "
+                        f"validées / {total_pending} en attente"
+                    ),
+                    author_email=_current_user_email(),
+                )
+                st.success("Dictionnaire sauvegardé sur GitHub. ✅")
+            except Exception as e:
+                st.error(f"Échec de la sauvegarde GitHub : {e}")
+
+    if total_pending > 0:
+        st.info(
+            f"🤖 **{total_pending} proposition(s) IA en attente de validation.** "
+            "Déroule les champs concernés ci-dessous pour valider ou corriger."
+        )
+
+    st.markdown("---")
+
+    # --- Helper: friendlier display labels for common enum fields ---
+    friendly_labels = {
+        "vehicle.usage": "🚗 Véhicule — usage (private / utility / service)",
+        "vehicle.motorisation": "⛽ Véhicule — motorisation",
+        "driver.civility": "🧑 Conducteur — civilité (M / F)",
+        "driver.seniority": "🧑 Conducteur — séniorité",
+        "driver.professionalStatus": "🧑 Conducteur — statut (internal / external)",
+        "contract.isHT": "📄 Contrat — HT (TRUE / FALSE)",
+        "contract.maintenanceNetwork": "📄 Contrat — réseau maintenance",
+        "contract.tiresType": "📄 Contrat — type de pneus",
+        "contract.tiresNetwork": "📄 Contrat — réseau pneus",
+        "asset.kind": "💳 Asset — type (fuel_card / toll_tag)",
+    }
+
+    # --- Sort: fields with pending items first, then by label ---
+    def _sort_key(fkey: str) -> tuple[int, str]:
+        pending = stats.get(fkey, {}).get(vm.STATUS_PENDING, 0)
+        label = friendly_labels.get(fkey, fkey)
+        return (0 if pending > 0 else 1, label.lower())
+
+    # Union of all known enum fields and fields present in the dict
+    # (so booleans like civilLiabilityEnabled show up even when empty).
+    all_fkeys = sorted(
+        set(allowed_by_fkey.keys()) | set(mappings.keys()),
+        key=_sort_key,
+    )
+
+    for fkey in all_fkeys:
+        schema, field_name = vm.parse_field_key(fkey)
+        bucket = mappings.get(fkey, {})
+        allowed = allowed_by_fkey.get(fkey, [])
+        counts = stats.get(fkey, {})
+        n_val = counts.get(vm.STATUS_VALIDATED, 0)
+        n_pen = counts.get(vm.STATUS_PENDING, 0)
+        label = friendly_labels.get(fkey, f"`{fkey}`")
+        badge = []
+        if n_val:
+            badge.append(f"✅ {n_val}")
+        if n_pen:
+            badge.append(f"🤖 {n_pen}")
+        if not badge:
+            badge.append("(vide)")
+        title = f"{label} — {' · '.join(badge)}"
+        with st.expander(title, expanded=(n_pen > 0)):
+            _render_field_mappings(
+                mappings=mappings,
+                schema=schema,
+                field_name=field_name,
+                bucket=bucket,
+                allowed=allowed,
+            )
+
+
+def _render_field_mappings(
+    mappings: dict,
+    schema: str,
+    field_name: str,
+    bucket: dict,
+    allowed: list[str],
+) -> None:
+    """Inline editor for a single (schema, field) entry list.
+
+    Each row shows raw → target + status + source, with per-row buttons
+    (validate, delete). Target is edited inline with a selectbox bounded
+    to ``allowed``. Below the list, a small form lets the user add a new
+    manual mapping.
+    """
+    if not allowed:
+        st.caption(
+            f"⚠️ Ce champ n'a pas de `allowed_values` déclarés dans SCHEMAS — "
+            "ajoute-le à `src/schemas.py` pour activer l'éditeur."
+        )
+        return
+
+    # --- Allowed values reminder (one-liner) ---
+    st.caption("Valeurs Revio autorisées : " + ", ".join(f"`{v}`" for v in allowed))
+
+    if not bucket:
+        st.info("Aucune entrée pour ce champ — utilise le formulaire ci-dessous.")
+    else:
+        # Sort: pending first, then by target then raw.
+        def _row_sort(kv):
+            key, vm_entry = kv
+            return (0 if vm_entry.status == vm.STATUS_PENDING else 1,
+                    vm_entry.target, vm_entry.raw.lower())
+
+        rows = sorted(bucket.items(), key=_row_sort)
+        # Header line
+        h1, h2, h3, h4, h5, h6 = st.columns([3, 2, 1.4, 1.4, 0.8, 0.8])
+        h1.markdown("**Valeur brute**")
+        h2.markdown("**→ Revio**")
+        h3.markdown("**Statut**")
+        h4.markdown("**Source**")
+        h5.markdown("**✅**")
+        h6.markdown("**🗑**")
+
+        for norm_key, entry in rows:
+            c1, c2, c3, c4, c5, c6 = st.columns([3, 2, 1.4, 1.4, 0.8, 0.8])
+            with c1:
+                raw_display = entry.raw if entry.raw.strip() else "(vide)"
+                note = f" — _{entry.note}_" if entry.note else ""
+                st.markdown(f"`{raw_display}`{note}")
+            with c2:
+                new_target = st.selectbox(
+                    "target",
+                    options=allowed,
+                    index=allowed.index(entry.target) if entry.target in allowed else 0,
+                    key=f"norm_target_{schema}_{field_name}_{norm_key}",
+                    label_visibility="collapsed",
+                )
+                if new_target != entry.target:
+                    vm.upsert(
+                        mappings, schema, field_name, entry.raw, new_target,
+                        status=vm.STATUS_VALIDATED,
+                        source=vm.SOURCE_MANUAL,
+                        user=_current_user_email(),
+                        note=entry.note,
+                    )
+                    st.rerun()
+            with c3:
+                if entry.status == vm.STATUS_VALIDATED:
+                    st.success("validée")
+                else:
+                    st.warning("en attente")
+            with c4:
+                st.caption(entry.source)
+            with c5:
+                if entry.status == vm.STATUS_PENDING:
+                    if st.button(
+                        "✅",
+                        key=f"norm_validate_{schema}_{field_name}_{norm_key}",
+                        help="Valider cette proposition IA",
+                        use_container_width=True,
+                    ):
+                        vm.validate_entry(
+                            mappings, schema, field_name, norm_key,
+                            user=_current_user_email(),
+                        )
+                        st.rerun()
+                else:
+                    st.caption(" ")
+            with c6:
+                if st.button(
+                    "🗑",
+                    key=f"norm_delete_{schema}_{field_name}_{norm_key}",
+                    help="Supprimer cette correspondance",
+                    use_container_width=True,
+                ):
+                    vm.delete_entry(mappings, schema, field_name, norm_key)
+                    st.rerun()
+
+    # --- Add new mapping form ---
+    st.markdown("")
+    with st.form(key=f"norm_add_{schema}_{field_name}", clear_on_submit=True):
+        f1, f2, f3 = st.columns([3, 2, 1])
+        with f1:
+            new_raw = st.text_input(
+                "Nouvelle valeur brute",
+                key=f"norm_new_raw_{schema}_{field_name}",
+                placeholder="ex. Hybride-Essence",
+            )
+        with f2:
+            new_target = st.selectbox(
+                "Valeur Revio",
+                options=allowed,
+                key=f"norm_new_target_{schema}_{field_name}",
+            )
+        with f3:
+            st.write("")  # align with inputs
+            submitted = st.form_submit_button(
+                "➕ Ajouter", use_container_width=True, type="primary",
+            )
+        if submitted:
+            if not new_raw or not new_raw.strip():
+                st.warning("La valeur brute ne peut pas être vide.")
+            else:
+                try:
+                    vm.upsert(
+                        mappings, schema, field_name,
+                        new_raw.strip(), new_target,
+                        status=vm.STATUS_VALIDATED,
+                        source=vm.SOURCE_MANUAL,
+                        user=_current_user_email(),
+                    )
+                    st.success(
+                        f"Ajouté : `{new_raw.strip()}` → `{new_target}` ✅"
+                    )
+                    st.rerun()
+                except ValueError as e:
+                    st.error(str(e))
 
 
 def _render_table_rules(table_slug: str):
@@ -1943,6 +2358,9 @@ elif st.session_state.mode == "engine":
 
 elif st.session_state.mode == "rules":
     render_rules_page()
+
+elif st.session_state.mode == "normal":
+    render_normalization_page()
 
 # ========== Classic mode: horizontal stepper above step content ==========
 elif st.session_state.mode == "classic":
