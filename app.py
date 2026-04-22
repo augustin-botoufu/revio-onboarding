@@ -40,6 +40,8 @@ from src import ai_normalization as ain
 from src import fleet_segmentation as fseg
 from src import zip_writer as zw
 from src.excel_report import build_report_xlsx
+from src import auth as rv_auth
+from src.session_reset import reset_import_state
 
 
 # Mapping between the `detect()` source_type and the YAML `source` slug.
@@ -153,6 +155,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+# ========== Password gate ==========
+# Blocks the rest of the app until the user enters the shared team password
+# (configured in Streamlit Cloud → Settings → Secrets as `app_password`).
+# If no password is set, runs in "dev mode" with auth disabled.
+rv_auth.require_password()
 
 
 # ========== Branding (logo in the top-left, replaces the old sidebar title) ==========
@@ -597,6 +606,40 @@ with st.sidebar:
                             f"branche : `{result.get('branch')}` · "
                             f"fichier : `{result.get('path')}`"
                         )
+
+    # --- Session actions (always visible, at the bottom of the sidebar) ---
+    st.markdown("---")
+    # "Nouvel import" — clears uploaded files, mappings, engine result, fleet
+    # mapping, … but keeps auth + current nav. No page refresh needed.
+    if st.button(
+        "🔄 Nouvel import",
+        key="btn_reset_import",
+        use_container_width=True,
+        help="Vide tous les fichiers et mappings en cours pour repartir "
+             "d'un onboarding propre, sans rafraîchir la page.",
+    ):
+        reset_import_state(st.session_state)
+        st.session_state["mode"] = "home"
+        st.toast("Session remise à zéro — prêt pour un nouvel import.", icon="🔄")
+        st.rerun()
+
+    # Déconnexion — only if auth is actually active.
+    if not rv_auth.is_auth_disabled():
+        if st.button(
+            "🔓 Déconnexion",
+            key="btn_logout",
+            use_container_width=True,
+            help="Quitter la session et revenir à l'écran de mot de passe.",
+        ):
+            rv_auth.logout()
+            # Wipe all import state too, so the next user starts fresh.
+            reset_import_state(st.session_state)
+            st.rerun()
+    else:
+        st.caption(
+            "🔓 Accès libre — définissez `app_password` dans les Secrets "
+            "Streamlit Cloud pour restreindre l'accès."
+        )
 
 
 # ========== Home page (landing) ==========
