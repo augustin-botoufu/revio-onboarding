@@ -150,7 +150,7 @@ def match_pattern(
     return None
 
 
-def format_yaml_snippet(
+def build_pattern_entry(
     slug: str,
     filename: str,
     columns: list[str],
@@ -159,16 +159,19 @@ def format_yaml_snippet(
     header_row: Optional[int] = None,
     column_mapping: Optional[dict[str, str]] = None,
     author: Optional[str] = None,
-) -> str:
-    """Build a YAML snippet the user can copy into `learned_patterns.yml`.
+) -> dict[str, Any]:
+    """Build the structured dict representation of a learned pattern.
+
+    This is the canonical form — same shape as a YAML entry — used by
+    `github_sync.save_pattern()` to commit directly via the GitHub API,
+    and by `format_yaml_snippet()` for the legacy copy-paste flow.
 
     The filename regex is derived from the filename: we lowercase it, strip
     the date/timestamp-like suffixes, and escape special chars. The user can
-    edit the regex before saving if they want.
+    edit the regex later.
 
-    Columns signature: we take up to 2 "strong" columns (long, likely unique
-    to this format) to require on top of the filename regex. Purely
-    heuristic — the user can tweak afterward.
+    Columns signature: up to 2 "strong" columns (long, likely unique to this
+    format) required on top of the filename regex. Purely heuristic.
     """
     base_id = _slugify(filename) or slug
     fname_regex = _derive_filename_regex(filename)
@@ -192,8 +195,29 @@ def format_yaml_snippet(
     entry["created_at"] = date.today().isoformat()
     if author:
         entry["created_by"] = author
+    return entry
 
-    # Produce a YAML snippet embedded under `patterns:` so the user pastes as-is.
+
+def format_yaml_snippet(
+    slug: str,
+    filename: str,
+    columns: list[str],
+    *,
+    loueur_hint: Optional[str] = None,
+    header_row: Optional[int] = None,
+    column_mapping: Optional[dict[str, str]] = None,
+    author: Optional[str] = None,
+) -> str:
+    """Legacy copy-paste snippet. Wraps `build_pattern_entry()` in YAML."""
+    entry = build_pattern_entry(
+        slug,
+        filename,
+        columns,
+        loueur_hint=loueur_hint,
+        header_row=header_row,
+        column_mapping=column_mapping,
+        author=author,
+    )
     snippet_body = yaml.safe_dump(
         [entry], sort_keys=False, allow_unicode=True, default_flow_style=False
     )

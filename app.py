@@ -34,6 +34,7 @@ from src.schemas import SCHEMAS, header_for
 from src import rules_engine
 from src import rules_io
 from src import learned_patterns as lp
+from src import github_sync as gh
 from src.excel_report import build_report_xlsx
 
 
@@ -546,6 +547,41 @@ with st.sidebar:
                 label_visibility="collapsed",
             )
 
+        # GitHub sync diagnostics — lets the user verify their PAT works
+        # without having to memorize a real pattern (Jalon 2.5 safety net).
+        with st.expander("🔌 Sync GitHub (mémoire)", expanded=False):
+            if not gh.is_configured():
+                st.caption(
+                    "Auto-commit GitHub non activé. Ajoute `GITHUB_TOKEN` et "
+                    "`GITHUB_REPO` dans Streamlit Cloud → Settings → Secrets "
+                    "pour activer la mémorisation automatique. Sans ça, la "
+                    "mémorisation fonctionne toujours mais en copier-coller."
+                )
+            else:
+                if st.button(
+                    "🔌 Tester la connexion",
+                    key="gh_check_connection",
+                    use_container_width=True,
+                    help="Lit `learned_patterns.yml` sur GitHub pour vérifier "
+                         "que le token et le chemin sont bons. N'écrit rien.",
+                ):
+                    with st.spinner("Test de la connexion GitHub..."):
+                        st.session_state["gh_check_result"] = gh.check_connection()
+                result = st.session_state.get("gh_check_result")
+                if result:
+                    if not result.get("ok"):
+                        st.error(f"❌ {result.get('message', 'Échec')}")
+                    elif not result.get("file_exists"):
+                        st.warning(f"⚠️ {result.get('message')}")
+                    else:
+                        st.success(f"✅ {result.get('message')}")
+                    if result.get("configured"):
+                        st.caption(
+                            f"Repo : `{result.get('repo')}` · "
+                            f"branche : `{result.get('branch')}` · "
+                            f"fichier : `{result.get('path')}`"
+                        )
+
 
 # ========== Home page (landing) ==========
 def render_home_page() -> None:
@@ -673,6 +709,24 @@ def _render_classic_stepper() -> None:
 
 
 # ========== Engine mode (YAML rules engine, Vehicle only) ==========
+def _current_user_email() -> str | None:
+    """Best-effort read of the Streamlit-authenticated user's email.
+
+    Used as metadata on learned_patterns entries (created_by) and on GitHub
+    commits (committer email). Safe to call outside an auth context — returns
+    None if no user info is available.
+    """
+    try:
+        user_obj = getattr(st, "user", None)
+        if user_obj is None:
+            return None
+        if hasattr(user_obj, "get"):
+            return user_obj.get("email") or None
+        return getattr(user_obj, "email", None) or None
+    except Exception:
+        return None
+
+
 def _render_manual_mapping_section(engine_files: dict) -> None:
     """Render the column-mapping UI for slugs whose columns aren't baked in YAML.
 
@@ -813,27 +867,31 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                                 st.json({"mapping_proposé": proposed, **debug})
                         st.rerun()
 
-                # Memorize button — produces a YAML snippet the user
-                # pastes into src/rules/learned_patterns.yml and commits.
+                # Memorize button — Jalon 2.5: build the pattern entry and
+                # stash it in session_state. The preview + confirm/cancel
+                # section below handles the actual commit to GitHub.
                 # Label changes when the file already matches an existing
-                # pattern so the user knows it's an update path (replace
-                # the existing entry to avoid duplicates).
+                # pattern so the user knows it's an update (overwrite by id).
                 memorize_label = (
                     "♻️ Mettre à jour ce format"
                     if learned_id
                     else "📋 Mémoriser ce format"
                 )
+                gh_configured = gh.is_configured()
+                memorize_help = (
+                    "Construit un pattern à partir du mapping courant. "
+                    "Tu vois un aperçu avant que ça parte sur GitHub — "
+                    "rien n'est écrit tant que tu n'as pas confirmé."
+                    if gh_configured
+                    else "Génère un bloc YAML à coller à la main dans "
+                         "`src/rules/learned_patterns.yml` (GitHub auto-"
+                         "commit non configuré — voir README)."
+                )
                 if st.button(
                     memorize_label,
                     key=f"engine_memorize_{key}",
                     use_container_width=True,
-                    help=(
-                        "Génère un bloc YAML à coller dans "
-                        "`src/rules/learned_patterns.yml` puis à commit sur "
-                        "GitHub. La prochaine fois qu'un fichier avec la "
-                        "même signature arrive, le mapping sera appliqué "
-                        "automatiquement (plus besoin de cliquer IA)."
-                    ),
+                    help=memorize_help,
                 ):
                     # Effective per-file mapping drawn from the override dict.
                     current_mapping: dict[str, str] = {
@@ -847,25 +905,12 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                             "d'abord (IA ou manuel), puis clique sur Mémoriser."
                         )
                     else:
-                        # Use the mapped source columns as the pattern
-                        # signature: if these specific headers are present
-                        # in a future file, we're confident it's the same
-                        # format. Falls back to the generic heuristic only
-                        # when nothing is mapped (shouldn't happen here).
+                        # Use mapped source columns as the pattern signature:
+                        # if these specific headers are present in a future
+                        # file, we're confident it's the same format.
                         signature_cols = [c for c in current_mapping.values() if c]
-                        # Try to recover the logged-in user email if present
-                        # (nice-to-have metadata on the pattern entry).
-                        author_email = None
-                        try:
-                            user_obj = getattr(st, "user", None)
-                            if user_obj is not None:
-                                if hasattr(user_obj, "get"):
-                                    author_email = user_obj.get("email")
-                                else:
-                                    author_email = getattr(user_obj, "email", None)
-                        except Exception:
-                            author_email = None
-                        snippet = lp.format_yaml_snippet(
+                        author_email = _current_user_email()
+                        entry = lp.build_pattern_entry(
                             slug=slug,
                             filename=info["filename"],
                             columns=signature_cols or [str(c) for c in df.columns],
@@ -873,7 +918,9 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                             column_mapping=current_mapping,
                             author=author_email,
                         )
-                        st.session_state[f"engine_snippet_{key}"] = snippet
+                        st.session_state[f"engine_pending_pattern_{key}"] = entry
+                        # Clear any stale fallback-snippet state from previous runs.
+                        st.session_state.pop(f"engine_snippet_{key}", None)
                         st.rerun()
             with c2:
                 st.caption(
@@ -881,30 +928,125 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
                     + ", ".join(f"`{c}`" for c in list(df.columns)[:10])
                     + (" ..." if len(df.columns) > 10 else "")
                 )
+                # Delete-pattern button: only shown when this file matched
+                # an existing pattern AND GitHub sync is configured. One
+                # click = one commit (the deletion is revertible via git
+                # history, so we skip the confirmation dance).
+                if learned_id and gh.is_configured():
+                    if st.button(
+                        f"🗑️ Supprimer le pattern `{learned_id}`",
+                        key=f"engine_delete_pattern_{key}",
+                        help=(
+                            "Retire ce pattern de `learned_patterns.yml` sur "
+                            "GitHub. Utile si tu as mémorisé par erreur un "
+                            "format de test. Réversible via l'historique git."
+                        ),
+                    ):
+                        try:
+                            resp = gh.delete_pattern(
+                                learned_id,
+                                author_email=_current_user_email(),
+                            )
+                            if resp.get("skipped"):
+                                st.warning(
+                                    f"Le pattern `{learned_id}` n'existait "
+                                    "plus sur GitHub — rien à supprimer."
+                                )
+                            else:
+                                st.success(
+                                    f"✅ Pattern `{learned_id}` supprimé "
+                                    "sur GitHub. Streamlit va redéployer "
+                                    "dans ~1 min — recharge la page après."
+                                )
+                                # Clear any pending preview for this file
+                                # and force a fresh match on next rerun.
+                                st.session_state.pop(
+                                    f"engine_pending_pattern_{key}", None
+                                )
+                        except gh.GitHubSyncError as e:
+                            st.error(f"❌ {e.user_message}")
 
-            # Render the last-generated memorize snippet, if any. Persisted
-            # in session_state so it survives reruns and stays on screen
-            # until the user copies it (or clicks "Masquer").
-            snippet = st.session_state.get(f"engine_snippet_{key}")
-            if snippet:
-                st.markdown(
-                    "##### 📋 Snippet YAML — à coller dans "
-                    "`src/rules/learned_patterns.yml` (sous la clé `patterns:`)"
+            # --- Preview / confirm flow -------------------------------------
+            # When the user clicked Memorize we stashed an entry here. Show a
+            # YAML preview and require an explicit confirm before committing.
+            pending = st.session_state.get(f"engine_pending_pattern_{key}")
+            if pending:
+                import yaml as _yaml  # local import — yaml is already a dep
+                preview_yaml = _yaml.safe_dump(
+                    [pending],
+                    sort_keys=False,
+                    allow_unicode=True,
+                    default_flow_style=False,
                 )
-                if learned_id:
+                st.markdown("##### 🔍 Aperçu du pattern à enregistrer")
+                if learned_id and pending.get("id") == learned_id:
                     st.info(
                         f"Ce fichier matchait déjà le pattern `{learned_id}`. "
-                        "Remplace l'entrée existante dans "
-                        "`learned_patterns.yml` par le bloc ci-dessous pour "
-                        "éviter les doublons."
+                        "L'enregistrement va **remplacer** l'entrée existante "
+                        "(pas de doublon)."
                     )
-                st.code(snippet, language="yaml")
-                if st.button(
-                    "✖️ Masquer le snippet",
-                    key=f"engine_snippet_hide_{key}",
-                ):
-                    st.session_state.pop(f"engine_snippet_{key}", None)
-                    st.rerun()
+                st.code(preview_yaml, language="yaml")
+
+                if gh.is_configured():
+                    cc1, cc2 = st.columns([2, 1])
+                    with cc1:
+                        if st.button(
+                            "✅ Confirmer et enregistrer sur GitHub",
+                            key=f"engine_confirm_{key}",
+                            type="primary",
+                            use_container_width=True,
+                        ):
+                            try:
+                                resp = gh.save_pattern(
+                                    pending,
+                                    author_email=_current_user_email(),
+                                )
+                                if resp.get("skipped"):
+                                    st.info(
+                                        "Aucun changement à enregistrer "
+                                        "(pattern identique déjà présent)."
+                                    )
+                                else:
+                                    st.success(
+                                        f"✅ Pattern `{pending.get('id')}` "
+                                        "enregistré sur GitHub. Streamlit va "
+                                        "redéployer dans ~1 min — recharge la "
+                                        "page après pour que la mémoire soit "
+                                        "active."
+                                    )
+                                st.session_state.pop(
+                                    f"engine_pending_pattern_{key}", None
+                                )
+                            except gh.GitHubSyncError as e:
+                                st.error(f"❌ {e.user_message}")
+                    with cc2:
+                        if st.button(
+                            "✖️ Annuler",
+                            key=f"engine_cancel_{key}",
+                            use_container_width=True,
+                        ):
+                            st.session_state.pop(
+                                f"engine_pending_pattern_{key}", None
+                            )
+                            st.rerun()
+                else:
+                    # Fallback: GitHub sync not configured — keep the
+                    # copy-paste UX so the feature is still usable.
+                    st.warning(
+                        "🔑 GitHub auto-commit non configuré (manque "
+                        "`GITHUB_TOKEN` et/ou `GITHUB_REPO` dans les secrets "
+                        "Streamlit). Copie le bloc ci-dessus sous `patterns:` "
+                        "dans `src/rules/learned_patterns.yml` et committe à "
+                        "la main."
+                    )
+                    if st.button(
+                        "✖️ Masquer l'aperçu",
+                        key=f"engine_cancel_{key}",
+                    ):
+                        st.session_state.pop(
+                            f"engine_pending_pattern_{key}", None
+                        )
+                        st.rerun()
 
             st.markdown("---")
             for field_name in MANUAL_MAPPABLE_FIELDS:
