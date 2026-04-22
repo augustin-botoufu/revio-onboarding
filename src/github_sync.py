@@ -45,6 +45,7 @@ import yaml  # type: ignore
 
 
 DEFAULT_PATH = "src/rules/learned_patterns.yml"
+DEFAULT_VALUE_MAPPINGS_PATH = "src/rules/value_mappings.yml"
 DEFAULT_BRANCH = "main"
 API_BASE = "https://api.github.com"
 
@@ -514,3 +515,113 @@ def check_connection() -> dict:
         ),
     )
     return result
+
+
+# --- Generic file read/write (Jalon 2.7 — used by value_mappings.yml) -------
+
+def fetch_file(cfg: GitHubConfig, path: str) -> RemoteFile:
+    """GET any file at ``path`` from the configured repo/branch.
+
+    Returns ``RemoteFile(text="", sha="")`` on 404 so the caller can create
+    the file on first commit. Unlike ``fetch_patterns_yaml``, does NOT seed
+    with a YAML header — callers that need one must handle it themselves.
+    """
+    url = f"{API_BASE}/repos/{cfg.repo}/contents/{path}?ref={cfg.branch}"
+    try:
+        payload = _http("GET", url, cfg.token)
+    except GitHubFileNotFound:
+        return RemoteFile(text="", sha="")
+    content_b64 = payload.get("content") or ""
+    sha = payload.get("sha") or ""
+    try:
+        text = base64.b64decode(content_b64).decode("utf-8")
+    except Exception as e:
+        raise GitHubSyncError(
+            "Réponse GitHub illisible (base64 invalide).", cause=e
+        ) from e
+    return RemoteFile(text=text, sha=sha)
+
+
+def commit_file_at(
+    cfg: GitHubConfig,
+    path: str,
+    new_text: str,
+    *,
+    sha: str,
+    message: str,
+    author_name: Optional[str] = None,
+    author_email: Optional[str] = None,
+) -> dict:
+    """Commit ``new_text`` at an arbitrary ``path`` (overrides cfg.path).
+
+    Same semantics as ``commit_file`` (empty sha = create, non-empty = update).
+    """
+    url = f"{API_BASE}/repos/{cfg.repo}/contents/{path}"
+    encoded = base64.b64encode(new_text.encode("utf-8")).decode("ascii")
+    body: dict[str, Any] = {
+        "message": message,
+        "content": encoded,
+        "branch": cfg.branch,
+    }
+    if sha:
+        body["sha"] = sha
+    if author_name or author_email:
+        body["committer"] = {
+            "name": author_name or "Revio Onboarding Bot",
+            "email": author_email or "bot@gorevio.co",
+        }
+    return _http("PUT", url, cfg.token, body=body)
+
+
+# --- value_mappings.yml ---------------------------------------------------
+
+def _value_mappings_path() -> str:
+    """Resolve the repo-relative path of value_mappings.yml from secrets."""
+    return _read_secret("GITHUB_VALUE_MAPPINGS_PATH") or DEFAULT_VALUE_MAPPINGS_PATH
+
+
+def fetch_value_mappings_yaml() -> Optional[str]:
+    """Return the current value_mappings.yml text from GitHub, or None if the
+    file doesn't exist yet on the configured branch."""
+    cfg = get_config()
+    remote = fetch_file(cfg, _value_mappings_path())
+    return remote.text if remote.sha else None
+
+
+def save_value_mappings_yaml(
+    yaml_text: str,
+    *,
+    commit_message: str = "value_mappings: update via app",
+    author_email: Optional[str] = None,
+) -> dict:
+    """Commit the full value_mappings.yml to GitHub.
+
+    Unlike patterns, there is no merge logic here: the app holds the whole
+    mapping dict in memory, serializes it with ``vm.dump_yaml``, and we
+    overwrite the remote file. If another commit landed between our fetch
+    and our PUT, we retry once with the latest sha — beyond that the caller
+    gets a ``GitHubConflict`` to display to the user (who can reload).
+    """
+    cfg = get_config()
+    path = _value_mappings_path()
+    msg = commit_message
+
+    last_err: Optional[GitHubConflict] = None
+    for _attempt in range(_MAX_CONFLICT_RETRIES):
+        remote = fetch_file(cfg, path)
+        if remote.text == yaml_text:
+            return {"skipped": True, "reason": "no_change"}
+        try:
+            return commit_file_at(
+                cfg, path, yaml_text,
+                sha=remote.sha, message=msg, author_email=author_email,
+            )
+        except GitHubConflict as e:
+            last_err = e
+            continue
+    assert last_err is not None  # pragma: no cover
+    raise GitHubSyncError(
+        "Écritures concurrentes sur value_mappings.yml, abandon après "
+        f"{_MAX_CONFLICT_RETRIES} essais. Réessaie dans quelques secondes.",
+        cause=last_err,
+    )

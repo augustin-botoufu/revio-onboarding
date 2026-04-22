@@ -49,6 +49,7 @@ import yaml  # type: ignore
 
 from . import transforms
 from . import rules_io
+from . import value_mappings as vm
 from .normalizers import plate_for_matching
 
 
@@ -74,6 +75,14 @@ class EngineResult:
     parse_warnings_by_cell: dict[tuple[str, str], list[str]] = field(default_factory=dict)
     # Echo of the rules YAML so downstream report can read source_labels
     rules_yaml: Optional[dict] = None
+    # Value-mapping audit trail (Jalon 2.7)
+    # (plate, field) → (raw_value, target, mapping_status) for cells normalized
+    # through the value_mappings cache (rather than the hardcoded transform).
+    value_mapping_hits: dict[tuple[str, str], tuple[str, str, str]] = field(default_factory=dict)
+    # (plate, field) → (schema_name, raw_value) for enum cells where neither
+    # the transform nor the cache could produce a value in allowed_values.
+    # Candidates for AI fallback.
+    unresolved_enums: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
 
 
 # ---------- YAML loading ----------
@@ -195,20 +204,36 @@ def _resolve_cell(
     indexed_sources: dict[str, pd.DataFrame],
     manual_column_overrides: dict[tuple[str, str], str],
     parse_warnings_by_cell: dict[tuple[str, str], list[str]],
+    *,
+    schema_name: Optional[str] = None,
+    value_mappings: Optional[dict] = None,
+    allowed_values_by_field: Optional[dict[str, set]] = None,
+    value_mapping_hits: Optional[dict[tuple[str, str], tuple[str, str, str]]] = None,
+    unresolved_enums: Optional[dict[tuple[str, str], tuple[str, str]]] = None,
 ) -> tuple[Any, Optional[str], list[tuple[str, Any]]]:
     """Resolve a single (plate, field) cell by running ALL applicable rules.
 
     Returns (winner_value, winner_source_slug, conflicts_list) where
     conflicts_list is empty if no conflict, otherwise contains ALL contributing
     (source_slug, value) pairs (winner first).
+
+    When ``allowed_values_by_field`` is provided and the field is enum-typed,
+    values that come out of the transform but are NOT in allowed_values are
+    passed through the ``value_mappings`` cache (normalized raw → target).
+    Cells that neither the transform nor the cache can normalize are recorded
+    in ``unresolved_enums`` for downstream AI fallback / user review.
     """
     spec = fields_spec[field_name]
     rules = sorted(
         spec.get("rules", []),
         key=lambda r: (r.get("priority", 99), r.get("source", "")),
     )
+    allowed = None
+    if allowed_values_by_field and field_name in allowed_values_by_field:
+        allowed = allowed_values_by_field[field_name]
     # Collect all contributions (prio, source, value)
     contributions: list[tuple[int, str, Any]] = []
+    last_unresolved_raw: Optional[str] = None
     for rule in rules:
         source_slug = rule.get("source")
         transform_name = rule.get("transform", "passthrough")
@@ -233,16 +258,72 @@ def _resolve_cell(
         val, warns = transforms.apply(transform_name, raw)
         if warns:
             parse_warnings_by_cell.setdefault((str(plate), field_name), []).extend(warns)
+
+        # Jalon 2.7 — value-mapping cache layer for enum fields.
+        #
+        # The cache kicks in whenever the transform doesn't land on a value
+        # that's in `allowed_values` — including when it returned None
+        # (map_client_usage('VP') → None is a classic example).
+        #
+        # Priority:
+        #   1. Transform output is already in allowed_values → keep it.
+        #   2. Cache hit on the ORIGINAL raw → use its target, record the hit.
+        #   3. Cache hit on the post-transform value → same.
+        #   4. Neither → record the raw as unresolved (AI fallback candidate),
+        #      and keep whatever the transform produced (may be None).
+        if allowed is not None:
+            val_str = "" if _is_null(val) else str(val)
+            raw_is_empty = raw is None or (isinstance(raw, float) and pd.isna(raw)) \
+                or not str(raw).strip()
+            if val_str not in allowed and not raw_is_empty:
+                mapping = None
+                if value_mappings and schema_name:
+                    mapping = vm.lookup(value_mappings, schema_name, field_name, raw)
+                    if mapping is None and val_str:
+                        mapping = vm.lookup(value_mappings, schema_name, field_name, val_str)
+                if mapping is not None and mapping.target in allowed:
+                    if value_mapping_hits is not None:
+                        value_mapping_hits[(str(plate), field_name)] = (
+                            str(raw),
+                            mapping.target,
+                            mapping.status,
+                        )
+                    val = mapping.target
+                else:
+                    # Stash the raw so we can report it as unresolved later.
+                    last_unresolved_raw = str(raw)
         if _is_null(val):
             continue
         contributions.append((prio, source_slug, val))
 
     if not contributions:
+        # No contribution survived (all null, columns missing, or transform emptied
+        # them). If we saw at least one non-null raw that we couldn't normalize to
+        # allowed_values, record it as unresolved — the user will see it in the
+        # « Normalisations » tab and AI fallback can pick it up.
+        if (
+            allowed is not None
+            and last_unresolved_raw
+            and unresolved_enums is not None
+            and schema_name
+        ):
+            unresolved_enums[(str(plate), field_name)] = (schema_name, last_unresolved_raw)
         return None, None, []
 
     # Deterministic winner: first contribution in (prio, source) order
     contributions.sort(key=lambda x: (x[0], x[1]))
     winner_prio, winner_source, winner_val = contributions[0]
+
+    # If the winner still isn't in allowed_values, flag it (even though we
+    # keep the value in the df so the cell isn't silently dropped).
+    if (
+        allowed is not None
+        and unresolved_enums is not None
+        and schema_name
+        and isinstance(winner_val, str)
+        and winner_val not in allowed
+    ):
+        unresolved_enums[(str(plate), field_name)] = (schema_name, winner_val)
 
     # Conflicts: any contribution with a DIFFERENT value than the winner
     # (case-insensitive + whitespace-insensitive for strings, to avoid noise).
@@ -299,14 +380,21 @@ def _build_df_for_plates(
     fields_spec: dict,
     indexed_sources: dict[str, pd.DataFrame],
     manual_column_overrides: dict[tuple[str, str], str],
-) -> tuple[pd.DataFrame, dict, dict, dict]:
+    *,
+    schema_name: Optional[str] = None,
+    value_mappings: Optional[dict] = None,
+    allowed_values_by_field: Optional[dict[str, set]] = None,
+) -> tuple[pd.DataFrame, dict, dict, dict, dict, dict]:
     """Build a DataFrame for a given plate set, returning tracking structures.
 
-    Returns (df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell).
+    Returns (df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell,
+    value_mapping_hits, unresolved_enums).
     """
     source_by_cell: dict[tuple[str, str], str] = {}
     conflicts_by_cell: dict[tuple[str, str], list[tuple[str, Any]]] = {}
     parse_warnings_by_cell: dict[tuple[str, str], list[str]] = {}
+    value_mapping_hits: dict[tuple[str, str], tuple[str, str, str]] = {}
+    unresolved_enums: dict[tuple[str, str], tuple[str, str]] = {}
 
     # Pre-create df with object dtype so ints stay as ints
     out_df = pd.DataFrame(
@@ -323,6 +411,11 @@ def _build_df_for_plates(
                 indexed_sources,
                 manual_column_overrides,
                 parse_warnings_by_cell,
+                schema_name=schema_name,
+                value_mappings=value_mappings,
+                allowed_values_by_field=allowed_values_by_field,
+                value_mapping_hits=value_mapping_hits,
+                unresolved_enums=unresolved_enums,
             )
             if val is not None:
                 out_df.at[plate, field_name] = val
@@ -334,7 +427,14 @@ def _build_df_for_plates(
     _apply_defaults_for_plates(plates, fields_spec, out_df, source_by_cell)
 
     out_df.index.name = "plate_key"
-    return out_df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell
+    return (
+        out_df,
+        source_by_cell,
+        conflicts_by_cell,
+        parse_warnings_by_cell,
+        value_mapping_hits,
+        unresolved_enums,
+    )
 
 
 # ---------- Public API ----------
@@ -345,12 +445,23 @@ def apply_rules(
     source_dfs: dict[str, pd.DataFrame],
     manual_column_overrides: Optional[dict[tuple[str, str], str]] = None,
     priority_overrides: Optional[dict[str, list[str]]] = None,
+    *,
+    schema_name: Optional[str] = None,
+    value_mappings: Optional[dict] = None,
+    allowed_values_by_field: Optional[dict[str, set]] = None,
 ) -> EngineResult:
     """Apply all rules declared in `rules_yaml` over the provided source DataFrames.
 
     `priority_overrides` (optional) lets the UI rewrite the priority order of
     sources per field for this run only — without mutating the YAML on disk.
     Format: {field_name: [source_slug_in_priority_order]}. See rules_io.
+
+    Jalon 2.7 kwargs (optional):
+    - ``schema_name`` — one of "vehicle"/"driver"/"contract"/"asset". Required
+      for the value-mapping cache to find the right bucket.
+    - ``value_mappings`` — in-memory mappings dict (from ``vm.load()``).
+    - ``allowed_values_by_field`` — {field_name: set(allowed)} for enum fields;
+      cells whose value isn't in this set are run through the cache.
     """
     manual_column_overrides = manual_column_overrides or {}
     if priority_overrides:
@@ -412,8 +523,18 @@ def apply_rules(
         )
 
     # 3. Build main df from the authoritative plate set.
-    main_df, source_by_cell, conflicts_by_cell, parse_warnings_by_cell = _build_df_for_plates(
+    (
+        main_df,
+        source_by_cell,
+        conflicts_by_cell,
+        parse_warnings_by_cell,
+        value_mapping_hits,
+        unresolved_enums,
+    ) = _build_df_for_plates(
         all_plates, fields_spec, indexed, manual_column_overrides,
+        schema_name=schema_name,
+        value_mappings=value_mappings,
+        allowed_values_by_field=allowed_values_by_field,
     )
 
     # 4. Build orphan df (only runs if we have orphan plates).
@@ -422,9 +543,17 @@ def apply_rules(
         # We want orphan enrichment to use lessor files but NOT the client file
         # (which is irrelevant — these plates aren't in it).
         indexed_no_client = {k: v for k, v in indexed.items() if k != "client_file"}
-        orphan_df, _, _, _ = _build_df_for_plates(
+        orphan_result = _build_df_for_plates(
             orphan_plates, fields_spec, indexed_no_client, manual_column_overrides,
+            schema_name=schema_name,
+            value_mappings=value_mappings,
+            allowed_values_by_field=allowed_values_by_field,
         )
+        orphan_df = orphan_result[0]
+        # Merge orphan value-mapping hits + unresolved enums into the main trackers
+        # so the UI and AI fallback see the whole universe of cells at once.
+        value_mapping_hits.update(orphan_result[4])
+        unresolved_enums.update(orphan_result[5])
         # Tag each orphan with the source files where it was found
         found_in: dict[Any, list[str]] = {}
         for slug, df in indexed.items():
@@ -443,7 +572,24 @@ def apply_rules(
         conflicts_by_cell=conflicts_by_cell,
         parse_warnings_by_cell=parse_warnings_by_cell,
         rules_yaml=rules_yaml,
+        value_mapping_hits=value_mapping_hits,
+        unresolved_enums=unresolved_enums,
     )
+
+
+def _allowed_values_for(schema_name: str) -> dict[str, set]:
+    """Return {field_name: set(allowed_values)} for every enum field of a schema.
+
+    Lazy import so rules_engine stays importable without pulling schemas at
+    module load (keeps unit tests light)."""
+    from .schemas import SCHEMAS  # local import to avoid circular on boot
+    out: dict[str, set] = {}
+    for fs in SCHEMAS.get(schema_name, []):
+        allowed = getattr(fs, "allowed_values", None)
+        name = getattr(fs, "name", "")
+        if allowed and name:
+            out[name] = set(allowed)
+    return out
 
 
 def run_vehicle(
@@ -451,14 +597,25 @@ def run_vehicle(
     manual_column_overrides: Optional[dict[tuple[str, str], str]] = None,
     rules_path: Optional[str | Path] = None,
     priority_overrides: Optional[dict[str, list[str]]] = None,
+    value_mappings: Optional[dict] = None,
 ) -> EngineResult:
-    """Shortcut to run the Vehicle engine with the repo's vehicle.yml."""
+    """Shortcut to run the Vehicle engine with the repo's vehicle.yml.
+
+    If ``value_mappings`` is None, load them from disk (the seed YAML ships in
+    the repo). Pass an explicit dict to run with an in-memory patched copy
+    (e.g. after the UI edited entries and wants to preview before saving).
+    """
     if rules_path is None:
         rules_path = Path(__file__).parent / "rules" / "vehicle.yml"
     rules = load_rules(rules_path)
+    if value_mappings is None:
+        value_mappings = vm.load()
     return apply_rules(
         rules,
         source_dfs,
         manual_column_overrides=manual_column_overrides,
         priority_overrides=priority_overrides,
+        schema_name="vehicle",
+        value_mappings=value_mappings,
+        allowed_values_by_field=_allowed_values_for("vehicle"),
     )
