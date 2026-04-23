@@ -1,109 +1,106 @@
-# Revio Onboarding Tool
+# revio_engine_contract_v1 — Release backend Jalon 4.1
 
-Outil interne pour automatiser la préparation des fichiers d'import Revio à partir
-des fichiers hétéroclites reçus des clients (fichiers internes, exports loueurs,
-API Plaques).
+Moteur de règles Contract + side-car lineage partagé avec le moteur Vehicle.
+Cette release est **backend-only** : l'intégration UI Streamlit (onglets
+Moteur + Règles d'import multi-bases) est le Jalon 4.2 (prochaine session).
 
-## Ce que fait l'outil
+## Contenu
 
-1. Tu drag-and-drop tous les fichiers reçus pour un client (CSV ou Excel).
-2. L'outil détecte automatiquement le type de chaque fichier (fichier client,
-   Etat de parc Ayvens, UAT Arval, API Plaques, etc.).
-3. Un LLM (Claude) propose un mapping des colonnes vers les templates Revio.
-   Tu valides ou corriges en un clic.
-4. Tu découpes les agences détectées en flottes (une flotte = un dossier Revio).
-5. L'outil normalise tout ce qui traîne (dates dans tous les formats, plaques
-   avec/sans tirets, montants avec €, km en milliers ou unités, etc.).
-6. Il produit les 4 CSV Revio par flotte (`vehicle.csv`, `driver.csv`,
-   `contract.csv`, `asset.csv`) plus un rapport d'erreurs, dans un .zip.
+```
+revio_engine_contract_v1/
+├── README.md                    ← ce fichier
+├── test_integration.py          ← test end-to-end (PDF Arval + client_file fake)
+└── src/
+    ├── __init__.py
+    ├── lineage.py               ← NEW : LineageStore + LineageRecord (partagé V/C)
+    ├── rules_engine.py          ← Vehicle, retrofitté lineage (non-breaking)
+    ├── contract_engine.py       ← NEW : moteur Contract (clé composite plate|number)
+    ├── pdf_parser.py            ← NEW : Arval/Ayvens/AutreLoueur → DataFrame
+    ├── unknown_columns.py       ← NEW : flow colonne non identifiée
+    ├── rules_io.py, transforms.py, normalizers.py   ← communs (inchangés)
+    └── rules/
+        ├── vehicle.yml          ← inchangé
+        ├── contract.yml         ← NEW : 45 champs, 149 règles (généré depuis spec v2)
+        ├── rubriques_facture.yml  ← NEW : 11 whitelist + 28 blacklist
+        ├── partner_index.yml    ← NEW : 12 partenaires (loueurs, cartes, télébadge)
+        └── learned_patterns.yml ← colonnes apprises (Vehicle + Contract)
+```
 
-## Installation (sur ton Mac)
+## Les 5 briques livrées
 
-Prérequis : avoir Python 3.10+ installé (tape `python3 --version` dans un Terminal,
-si ça te sort un numéro > 3.10, tu es bon).
+1. **Lineage (`src/lineage.py`)**
+   Provenance par cellule (table, key, field, value, source_used, priority,
+   transform, rule_id, conflicts_ignored, notes, warnings). Side-car parquet
+   (fallback jsonl si pyarrow absent). Alimente l'assistant LLM du Jalon 5.0.
+
+2. **Retrofit Vehicle (`src/rules_engine.py`)**
+   `EngineResult.lineage` est désormais peuplé pour chaque cellule Vehicle
+   sans casser l'existant. `apply_rules(..., table="vehicle")` par défaut.
+
+3. **YAML Contract (`rules/contract.yml` + co)**
+   Généré par `/outputs/spec_contract/gen_yaml.py` depuis
+   `spec_contract_v2.xlsx`. Clé primaire : `(plate, number)`. Rubriques
+   classées whitelist/blacklist. Index partnerId (UUID loueurs) inclus.
+
+4. **Parser PDF factures (`src/pdf_parser.py`)**
+   Dispatch par loueur (Arval impl. full, Ayvens/AutreLoueur héritent —
+   à spécialiser sur samples). Regex contrat, durée, période, date.
+   `parse_factures_to_dataframe()` dé-duplique par `(plate, number)` en
+   gardant la facture la plus récente (R4 de la spec).
+
+5. **Moteur Contract (`src/contract_engine.py`)**
+   - Clé composite `"{plate}|{number}"` (index `contract_key`).
+   - `_resolve_cell` → priorité, tolérance (2 % + 2 €) sur prix, lineage.
+   - Post-pass : `durationMonths` (endDate − startDate), `isHT` (VP de l'EP
+     P1, fallback API_Plaque P2).
+   - Cross-check plaques : lignes des EP loueurs absentes du `client_file`
+     → `issues` (futur `contracts_errors.xlsx`).
+   - `unknown_column_requests` : champs mandatory non résolvables → flow UI.
+
+6. **Flow colonne non identifiée (`src/unknown_columns.py`)**
+   Persiste dans `learned_patterns.yml` le choix utilisateur (`column`,
+   `learned_on`, `learned_by`, `sample_values`). Consommable par les 2
+   moteurs via `learned_patterns_to_overrides(path, table)`.
+
+## Test d'intégration
 
 ```bash
-# 1. Ouvre un Terminal dans le dossier du projet.
-cd /chemin/vers/revio_onboarding
-
-# 2. Crée un environnement virtuel (isole les dépendances).
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 3. Installe les dépendances.
-pip install -r requirements.txt
-
-# 4. Copie le fichier d'exemple de configuration.
-cp .env.example .env
-
-# 5. Ouvre .env dans un éditeur et colle ta clé Anthropic :
-#    ANTHROPIC_API_KEY=sk-ant-... (obtenue sur https://console.anthropic.com/)
+cd revio_engine_contract_v1/
+python test_integration.py
 ```
 
-## Lancement
+Fixture : PDF Arval réel (5 contrats extraits) + client_file minimal
+(2 plaques matching). Résultat :
+- 2 contrats populés, 3 orphans flaggés
+- 26 lineage records
+- issues = 3 (cross-check), unknown_column_requests = 8 (champs optionnels)
+
+## Points d'attention pour le Jalon 4.2 (UI)
+
+- La **résolution de la colonne `plate` depuis `client_file`** nécessite
+  que le nom réel de colonne (`Immatriculation`, `N° immat`…) soit
+  déclaré dans `contract.yml` OU soit injecté via
+  `manual_column_overrides` au run-time. Sinon `plate`/`number` restent
+  vides en sortie malgré une clé composite correcte.
+- Les parsers Ayvens et AutreLoueur héritent d'Arval : à spécialiser dès
+  qu'on récupère des samples réels.
+- `parquet` requiert `pyarrow` → fallback `jsonl` transparent si absent.
+  En prod Streamlit Cloud, ajouter `pyarrow` au `requirements.txt`.
+
+## Commande de régénération des YAML
 
 ```bash
-# Depuis le dossier du projet, environnement virtuel activé :
-streamlit run app.py
+cd /outputs/spec_contract
+python gen_yaml.py
+# → rules/contract.yml, rules/rubriques_facture.yml, rules/partner_index.yml
 ```
 
-Ton navigateur s'ouvre sur `http://localhost:8501`. L'app tourne en local tant que
-le Terminal est ouvert.
+À rejouer après chaque édition de `spec_contract_v2.xlsx`.
 
-## Flux d'utilisation
+---
 
-1. **Sidebar** : saisis le nom du client (ex. `YSEIS`). Vérifie que la clé Anthropic
-   est bien détectée.
-2. **Étape 1** : dépose tous les fichiers (client + loueurs + API Plaques).
-3. **Étape 2** : vérifie que chaque fichier a bien été identifié et pointe vers le
-   bon schéma Revio (`vehicle`, `driver`, `contract`, `asset`). Ignore les
-   fichiers fiscaux (TVS, TVU) qui ne servent pas à l'import.
-4. **Étape 3** : pour chaque fichier, clique sur *Proposer un mapping (IA)*. Révise
-   les associations proposées.
-5. **Étape 4** : l'outil liste les agences trouvées. Groupe-les en flottes.
-6. **Étape 5** : télécharge le .zip avec tous les CSV prêts à importer.
+Jalon 4.2 (prochaine session) : onglets Vehicle/Contract sur page Moteur,
+onglets Règles d'import par base, zip de sortie enrichi (contracts.xlsx +
+contracts_errors.xlsx), segmentation flotte/agence appliquée aux contrats.
 
-## Instructions spéciales
-
-Dans la sidebar, tu peux écrire des règles en langage naturel qui s'appliquent à
-tout l'onboarding. Exemples :
-
-- *"Pour ce client, les VP-BR sont à classer en `service`, pas en `private`."*
-- *"Si la Date fin de contrat est vide, calcule-la depuis Date début + Durée (en mois)."*
-- *"La colonne `Moteur` de ce client utilise G/D/E (Gazole/Diesel/Essence) au lieu de T/H/E."*
-
-Ces instructions sont injectées dans le prompt du LLM au moment du mapping.
-
-## Structure du code
-
-```
-revio_onboarding/
-├── app.py               # UI Streamlit (le seul fichier "interface")
-├── src/
-│   ├── schemas.py       # Les 4 templates Revio cibles
-│   ├── partners.py      # UUIDs des loueurs (Ayvens, Arval, etc.)
-│   ├── normalizers.py   # Nettoyage dates/plaques/montants/km
-│   ├── detectors.py     # Détection automatique du type de fichier
-│   ├── llm_mapper.py    # Mapping de colonnes via Claude
-│   ├── pipeline.py      # Orchestration : charge, mappe, fusionne, valide
-│   └── output_writer.py # Génération du .zip final
-├── requirements.txt
-├── .env.example
-└── .streamlit/config.toml
-```
-
-## À faire
-
-- [ ] Intégration Google Drive (création du dossier client + upload des CSV).
-- [ ] Déploiement sur Streamlit Cloud avec auth équipe.
-- [ ] Mémorisation des mappings par client (ex. YSEIS se souvient du mapping du client).
-- [ ] Ajout des UUIDs manquants dans `src/partners.py`.
-- [ ] Mapping `usage` VS/VP/VP-BR → utility/service/private (à trancher avec Augustin).
-- [ ] Support de nouveaux loueurs au fur et à mesure qu'ils apparaissent.
-
-## Clé Anthropic
-
-Tu peux obtenir une clé sur https://console.anthropic.com/. Coût estimé : quelques
-centimes par onboarding (les prompts sont petits, les réponses aussi).
-
-Tu peux plafonner la consommation dans les réglages Anthropic pour dormir tranquille.
+Jalon 5.0 (après) : assistant LLM in-app consommant les lineage sidecars.

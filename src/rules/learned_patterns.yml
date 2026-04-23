@@ -14,22 +14,5 @@
 #         columns_include: ["Immatriculation", "VIN"]
 #       created_at: "2026-04-21"
 #       created_by: "augustin@gorevio.co"
-patterns:
-- id: vehicle_data
-  slug: autre_loueur_etat_parc
-  match:
-    filename_regex: (?i).*vehicle\ data.*
-    columns_include:
-    - Plaque d'immatriculation
-    - Date d'immatriculation
-  column_mapping:
-    registrationPlate: Plaque d'immatriculation
-    parcEntryAt: Date de Livraison
-    brand: Marque
-    model: Modèle
-    variant: Version
-    motorisation: Energie
-    co2gKm: Émissions CO2
-    registrationIssueDate: Date d'immatriculation
-    registrationVin: Châssis
-  created_at: '2026-04-22'
+
+patterns: []
