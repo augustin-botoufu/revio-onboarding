@@ -33,6 +33,9 @@ from src.output_writer import build_zip, split_by_fleet
 from src.schemas import SCHEMAS, header_for
 from src import rules_engine
 from src import rules_io
+from src import contract_engine as ce
+from src import pdf_parser as pdfp
+from src import unknown_columns as unkcol
 from src import learned_patterns as lp
 from src import github_sync as gh
 from src import value_mappings as vm
@@ -79,6 +82,10 @@ ENGINE_SOURCE_SLUGS = [
     "autre_loueur_pneus",
     "assurance_externe",
     "client_file",
+    # --- Contract-only sources (factures PDF) ---
+    "arval_facture_pdf",
+    "ayvens_facture_pdf",
+    "autre_loueur_facture_pdf",
 ]
 
 # Human-readable label + icon for each source slug, for the grouped cards
@@ -103,6 +110,9 @@ SLUG_DISPLAY: dict[str, tuple[str, str, int]] = {
     "autre_loueur_and":        ("📘", "Autre loueur — Avis non dépôt", 43),
     "autre_loueur_pneus":      ("📘", "Autre loueur — Pneus",          44),
     "assurance_externe":       ("🛡️", "Assurance externe",             50),
+    "arval_facture_pdf":       ("📄", "Arval — Facture (PDF)",          60),
+    "ayvens_facture_pdf":      ("📄", "Ayvens — Facture (PDF)",         61),
+    "autre_loueur_facture_pdf":("📄", "Autre loueur — Facture (PDF)",   62),
     "client_file":             ("👤", "Fichier client",                90),
 }
 
@@ -144,6 +154,18 @@ CLIENT_FILE_MAPPABLE_FIELDS = MANUAL_MAPPABLE_FIELDS
 # (ayvens_*, arval_*, api_plaques, …) have their column names baked into
 # vehicle.yml and don't need this step.
 SLUGS_NEEDING_MANUAL_MAPPING = {"client_file", "autre_loueur_etat_parc"}
+
+
+# Contract-side mappable fields — expected in the client_file for contracts.
+# Used by the "colonne non identifiée" UI when the engine can't resolve a
+# mandatory field on its own.
+MANUAL_MAPPABLE_FIELDS_CONTRACT = [
+    "plate", "number", "startDate", "endDate", "durationMonths",
+    "contractedMileage", "maxMileage", "extraKmPrice",
+    "vehicleValue", "batteryValue", "totalPrice",
+    "civilLiabilityPrice", "allRisksPrice", "maintenancePrice",
+    "partnerId", "isHT",
+]
 
 
 # ========== Page config ==========
@@ -485,6 +507,17 @@ def _init_state():
         # Shape: {table_slug: {field_name: [source_slug_in_priority_order]}}
         "rules_overrides": {},
         "rules_active_table": "vehicle",
+        # --- Contract engine (Jalon 4.2) ---
+        # Parallel state to engine_files / engine_result, scoped to Contract.
+        # PDFs and xlsx/csv live in the same dict; PDFs keep a parsed df
+        # produced by pdf_parser (one row per (plate, number)).
+        "contract_files": {},               # {key: {"df", "filename", "sheet_name", "slug", ...}}
+        "contract_uploaded_sig": None,
+        "contract_result": None,            # ContractEngineResult or None
+        "contract_overrides": {},           # {(file_key, field): source_col} for client_file Contract
+        # Resolved answers from the "colonne non identifiée" UI. Kept in memory
+        # until the user validates — then persisted via register_learned_column.
+        "contract_unknown_resolved": {},    # {(source_slug, field_name): column}
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1645,8 +1678,8 @@ def _fleet_segmentation_dialog():
     }
 
 
-def render_engine_page():
-    st.header("🧪 Moteur de règles — Vehicle (beta)")
+def _render_vehicle_engine_subpage():
+    st.header("🚗 Moteur de règles — Véhicules (beta)")
     st.caption(
         "Dépose les fichiers reçus pour un client. Le moteur applique les règles "
         "déclarées dans `src/rules/vehicle.yml` et produit le CSV Vehicle Revio. "
@@ -2034,41 +2067,88 @@ def render_engine_page():
     if not result.conflicts_by_cell and not result.issues and orphan_count == 0:
         st.success("Aucune anomalie — toutes les sources se sont bien alignées ✅")
 
-    # --- 6. Download — one zip, everything inside ---
-    st.markdown("### 6. Exports")
+    # --- 6. Download — unified pack (Vehicles + Contracts when available) ---
+    _render_unified_download()
+
+
+# ========== Unified download (shared between Vehicle + Contract tabs) ==========
+def _render_unified_download() -> None:
+    """Single download button that packages everything the engines produced.
+
+    Pulls both Vehicle and Contract results from session state. The zip is
+    always valid — if only one base ran, only that one lands in the zip.
+    """
+    v_result = st.session_state.get("engine_result")
+    c_result = st.session_state.get("contract_result")
+    if v_result is None and c_result is None:
+        return
+
+    st.markdown("### 📦 Export — pack unifié")
     client_name = st.session_state.client_name or "client"
     fleet_mapping = st.session_state.get("engine_fleet_mapping")
 
-    # Summary line above the button so the user knows what they're about to get.
-    n_all = len(df)
+    # Summary line.
+    bits: list[str] = []
+    if v_result is not None and v_result.df is not None and not v_result.df.empty:
+        bits.append(f"{len(v_result.df)} véhicule(s)")
+    if c_result is not None and c_result.df is not None and not c_result.df.empty:
+        bits.append(f"{len(c_result.df)} contrat(s)")
     if fleet_mapping is not None and fleet_mapping.is_active:
-        counts = fleet_mapping.counts_by_fleet()
-        detail = " · ".join(f"{n} ({counts.get(n, 0)})" for n in fleet_mapping.fleet_names)
-        st.caption(
-            f"📦 Le pack contiendra : **1 fichier global** ({n_all} véhicules) + "
-            f"**{len(fleet_mapping.fleet_names)} fichiers par flotte** ({detail}) + "
-            "le rapport Excel + un classeur maître multi-onglets."
-        )
-    else:
-        st.caption(
-            f"📦 Le pack contiendra : **1 fichier global** ({n_all} véhicules) + "
-            "le rapport Excel + un classeur maître à un onglet. "
-            "Clique sur *🏢 Segmenter en flottes* plus haut si tu veux un fichier par agence."
-        )
+        bits.append(f"segmenté en {len(fleet_mapping.fleet_names)} flotte(s)")
+    st.caption("📦 Le pack contiendra : " + " · ".join(bits) + " + rapports + classeur maître.")
 
-    # Build the report xlsx best-effort so failures don't block the download.
-    try:
-        report_bytes = build_report_xlsx(result, client_name=client_name)
-    except Exception as e:
-        report_bytes = None
-        st.warning(f"Rapport Excel indisponible : {e}")
+    # Vehicle report (existing).
+    vehicle_report_bytes = None
+    if v_result is not None:
+        try:
+            vehicle_report_bytes = build_report_xlsx(v_result, client_name=client_name)
+        except Exception as e:
+            st.warning(f"Rapport Excel véhicules indisponible : {e}")
+
+    # Contract df + errors df (issues + conflicts → one sheet each).
+    contract_df = c_result.df if c_result is not None else None
+    contract_orphan_df = c_result.orphan_df if c_result is not None else None
+    contract_errors_bytes = None
+    if c_result is not None:
+        try:
+            contract_errors_bytes = _build_contract_errors_xlsx(c_result, client_name=client_name)
+        except Exception as e:
+            st.warning(f"Rapport Excel contrats indisponible : {e}")
+
+    # Lineage sidecars (parquet if pyarrow available, jsonl fallback).
+    lineage_bytes_by_name: dict[str, bytes] = {}
+    for label, store in (
+        ("vehicle", getattr(v_result, "lineage", None) if v_result else None),
+        ("contract", getattr(c_result, "lineage", None) if c_result else None),
+    ):
+        if store is None or len(store) == 0:
+            continue
+        try:
+            import io as _io
+            df = store.to_dataframe()
+            buf = _io.BytesIO()
+            try:
+                df.to_parquet(buf, engine="pyarrow", index=False)
+                lineage_bytes_by_name[f"_lineage/{label}.parquet"] = buf.getvalue()
+            except Exception:
+                # Fallback to JSONL if pyarrow missing
+                buf = _io.StringIO()
+                df.to_json(buf, orient="records", lines=True, force_ascii=False)
+                lineage_bytes_by_name[f"_lineage/{label}.jsonl"] = buf.getvalue().encode("utf-8")
+        except Exception:
+            pass  # lineage is additive; never block the download on it
 
     try:
         zip_bytes, zip_name = zw.build_output_zip(
             client_name=client_name,
-            vehicle_df=df,
+            vehicle_df=v_result.df if v_result is not None else None,
             vehicle_fleet_mapping=fleet_mapping,
-            report_xlsx_bytes=report_bytes,
+            report_xlsx_bytes=vehicle_report_bytes,
+            contract_df=contract_df,
+            contract_orphan_df=contract_orphan_df,
+            contract_errors_xlsx_bytes=contract_errors_bytes,
+            contract_fleet_mapping=fleet_mapping,  # shared fleet mapping by plate
+            extra_files=lineage_bytes_by_name,
         )
         st.download_button(
             "📦 Télécharger le pack d'import (.zip)",
@@ -2080,6 +2160,439 @@ def render_engine_page():
         )
     except Exception as e:
         st.error(f"Impossible de construire le zip : {e}")
+
+
+def _build_contract_errors_xlsx(result, *, client_name: str) -> bytes:
+    """Produce a minimal contracts_errors.xlsx — 1 sheet per type (issues, conflicts).
+
+    Each row = 1 anomaly, with enough context to resolve. Cell-by-cell format
+    (R11 of the Contract spec). No inter-table duplication (isHT conflicts
+    already surface in the Vehicle errors file).
+    """
+    import io as _io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    # Sheet 1: global issues
+    ws = wb.create_sheet("issues")
+    ws.append(["plate", "number", "field", "source", "avertissement"])
+    for c in ws[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", start_color="1F2937")
+    for i in result.issues or []:
+        ws.append([
+            getattr(i, "plate", ""),
+            getattr(i, "number", ""),
+            getattr(i, "field", ""),
+            getattr(i, "source", ""),
+            getattr(i, "warning", ""),
+        ])
+
+    # Sheet 2: per-cell conflicts (tolerance-aware)
+    ws2 = wb.create_sheet("conflits_cellule")
+    ws2.append(["plate", "number", "field", "valeur_retenue", "conflits"])
+    for c in ws2[1]:
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = PatternFill("solid", start_color="1F2937")
+    for (key, field), conflicts in (result.conflicts_by_cell or {}).items():
+        plate, _, number = str(key).partition("|")
+        winner_src = (result.source_by_cell or {}).get((key, field))
+        ws2.append([
+            plate, number, field, str(winner_src),
+            " | ".join(f"{c.get('source')}={c.get('value')} ({c.get('reason', '')})" for c in conflicts),
+        ])
+
+    # Sheet 3: orphelins (contrats dans factures/EP loueur mais absents client_file)
+    ws3 = wb.create_sheet("orphelins")
+    if result.orphan_df is not None and not result.orphan_df.empty:
+        cols = list(result.orphan_df.columns)
+        ws3.append(cols)
+        for c in ws3[1]:
+            c.font = Font(bold=True, color="FFFFFF")
+            c.fill = PatternFill("solid", start_color="1F2937")
+        for _, row in result.orphan_df.iterrows():
+            ws3.append([row.get(c, "") for c in cols])
+    else:
+        ws3.append(["Aucun contrat orphelin détecté."])
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ========== Engine page — top wrapper with Vehicle/Contract tabs ==========
+def render_engine_page():
+    """Top-level Moteur page — switches between Vehicle and Contract sub-pages
+    via tabs. The final "Télécharger pack" button lives inside each sub-page
+    (via `_render_unified_download`) and produces the SAME unified zip — so
+    the user can download from whichever tab they're on.
+    """
+    st.title("🧪 Import — Moteur de règles")
+    tab_v, tab_c = st.tabs(["🚗 Véhicules", "📄 Contrats"])
+    with tab_v:
+        _render_vehicle_engine_subpage()
+    with tab_c:
+        _render_contract_engine_subpage()
+
+
+# ========== Contract engine sub-page (Jalon 4.2) ==========
+def _render_contract_engine_subpage():
+    st.header("📄 Moteur de règles — Contrats (beta)")
+    st.caption(
+        "Dépose les factures loueurs (PDF) + les états de parc déjà utilisés pour "
+        "les véhicules + le fichier client. Le moteur applique les règles de "
+        "`src/rules/contract.yml` et produit un CSV contrats prêt pour Revio, "
+        "clé primaire **(plaque, numéro de contrat)**."
+    )
+    if not rules_io.list_available_tables():
+        st.warning("contract.yml introuvable — le moteur Contract n'est pas encore configuré.")
+        return
+
+    # --- 1. Upload ---
+    st.markdown("### 1. Upload des fichiers (PDF + XLSX/CSV)")
+    uploaded = st.file_uploader(
+        "Factures PDF, états de parc, fichier client",
+        type=["pdf", "csv", "xlsx", "xls", "xlsm"],
+        accept_multiple_files=True,
+        key="contract_uploader",
+    )
+    current_sig = tuple(
+        (getattr(f, "name", ""), getattr(f, "size", 0)) for f in (uploaded or [])
+    )
+    last_sig = st.session_state.get("contract_uploaded_sig")
+
+    if uploaded and current_sig != last_sig:
+        new_files: dict = {}
+        # Lazy-load the rubriques yaml (for PDF classification). Fall back to
+        # empty whitelist/blacklist if the file is missing.
+        rub_path = Path(__file__).parent / "src" / "rules" / "rubriques_facture.yml"
+        whitelist, blacklist = [], []
+        if rub_path.exists():
+            try:
+                import yaml
+                rub = yaml.safe_load(rub_path.read_text(encoding="utf-8")) or {}
+                whitelist = rub.get("whitelist", [])
+                blacklist = rub.get("blacklist", [])
+            except Exception as e:
+                st.warning(f"Impossible de lire rubriques_facture.yml : {e}")
+
+        for up in uploaded:
+            filename = getattr(up, "name", "uploaded")
+            lower = filename.lower()
+            if lower.endswith(".pdf"):
+                # Parse the PDF facture → one row per (plate, number).
+                try:
+                    import tempfile, os as _os
+                    # pdf_parser reads from disk, so stage the upload.
+                    data = up.read() if hasattr(up, "read") else open(up, "rb").read()
+                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                        tf.write(data)
+                        tmp_path = tf.name
+                    # Try auto-detect lessor; default to arval (most common).
+                    lessor_hint = None
+                    low = filename.lower()
+                    if "arval" in low:
+                        lessor_hint = "arval"
+                    elif "ayvens" in low or "ald" in low:
+                        lessor_hint = "ayvens"
+                    df = pdfp.parse_factures_to_dataframe(
+                        [tmp_path],
+                        whitelist=whitelist,
+                        blacklist=blacklist,
+                        lessor_hint=lessor_hint,
+                    )
+                    try:
+                        _os.unlink(tmp_path)
+                    except Exception:
+                        pass
+                except Exception as e:
+                    st.error(f"Échec parsing PDF {filename}: {e}")
+                    continue
+                # Slug from lessor_hint (default arval)
+                slug = f"{lessor_hint or 'arval'}_facture_pdf"
+                key = filename  # PDFs don't have sheets
+                new_files[key] = {
+                    "df": df,
+                    "filename": filename,
+                    "sheet_name": "",
+                    "slug": slug,
+                    "is_pdf": True,
+                }
+            else:
+                # CSV / XLSX → use the same pipeline loader as Vehicle
+                try:
+                    pairs = load_tabular(up)
+                except Exception as e:
+                    st.error(f"Impossible de lire {filename}: {e}")
+                    continue
+                for sheet_name, df in pairs:
+                    if df.empty or df.shape[1] < 2:
+                        continue
+                    key = f"{filename}::{sheet_name}" if sheet_name else filename
+                    detected = detect(filename, df, sheet_name=sheet_name or None)
+                    default_slug = DETECTOR_TO_YAML_SLUG.get(detected.source_type, "client_file")
+                    new_files[key] = {
+                        "df": df,
+                        "filename": filename,
+                        "sheet_name": sheet_name,
+                        "slug": default_slug,
+                        "detected_type": detected.source_type,
+                        "detected_reason": detected.reason,
+                        "is_pdf": False,
+                    }
+        st.session_state.contract_files = new_files
+        st.session_state.contract_uploaded_sig = current_sig
+        st.session_state.contract_result = None
+        st.success(f"{len(new_files)} fichier(s) chargé(s) pour les contrats.")
+
+    contract_files = st.session_state.get("contract_files", {})
+    if not contract_files:
+        st.info("Aucun fichier chargé.")
+        return
+
+    # --- 2. Types detected per file (slug picker) ---
+    st.markdown("### 2. Types détectés")
+    for key, info in contract_files.items():
+        label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
+        current = info.get("slug") or "client_file"
+        if current not in ENGINE_SOURCE_SLUGS:
+            current = "client_file"
+        row = st.columns([7, 1, 4])
+        with row[0]:
+            emoji, hlabel, _ = slug_display(current)
+            st.markdown(f"**{label}**")
+            extra = " · 📄 PDF parsé" if info.get("is_pdf") else (
+                f" · détecté `{info.get('detected_type', '?')}`"
+            )
+            st.markdown(
+                f"<span style='color:#64748B;font-size:0.85em'>"
+                f"{len(info['df'])} ligne(s){extra}</span>",
+                unsafe_allow_html=True,
+            )
+        with row[1]:
+            with st.popover("🔍", help="Aperçu", use_container_width=True):
+                st.dataframe(info["df"].head(20), use_container_width=True, hide_index=True)
+        with row[2]:
+            info["slug"] = st.selectbox(
+                "Type YAML",
+                options=ENGINE_SOURCE_SLUGS,
+                index=ENGINE_SOURCE_SLUGS.index(current),
+                key=f"contract_slug_{key}",
+                label_visibility="collapsed",
+            )
+
+    # --- 3. Run ---
+    st.markdown("### 3. Lancer le moteur Contract")
+
+    # Carry VP info from the Vehicle result (if any) so isHT post-pass can
+    # reference the canonical VP classification computed earlier.
+    vehicle_vp_by_plate = _extract_vp_from_vehicle_result(st.session_state.get("engine_result"))
+    if vehicle_vp_by_plate:
+        st.caption(
+            f"ℹ️ VP hérité du moteur Véhicules : {sum(1 for v in vehicle_vp_by_plate.values() if v)} "
+            f"VP / {sum(1 for v in vehicle_vp_by_plate.values() if not v)} non-VP."
+        )
+
+    if st.button("▶️ Appliquer les règles Contract", type="primary",
+                 use_container_width=True, key="contract_run_btn"):
+        # Build source_dfs keyed by slug (concat files of same slug)
+        source_dfs: dict = {}
+        for key, info in contract_files.items():
+            slug = info.get("slug")
+            if not slug:
+                continue
+            df = info.get("df")
+            if df is None or df.empty:
+                continue
+            if slug in source_dfs:
+                source_dfs[slug] = pd.concat([source_dfs[slug], df], ignore_index=True, sort=False)
+            else:
+                source_dfs[slug] = df.copy()
+
+        # Apply user-resolved unknown columns (register_learned_column + overrides)
+        overrides: dict[tuple[str, str], str] = {}
+        patterns_path = Path(__file__).parent / "src" / "rules" / "learned_patterns.yml"
+        for (src_slug, field_name), col in st.session_state.contract_unknown_resolved.items():
+            overrides[(src_slug, field_name)] = col
+
+        try:
+            with st.spinner("Application des règles Contract..."):
+                result = ce.run_contract(
+                    source_dfs=source_dfs,
+                    manual_column_overrides=overrides or None,
+                    vehicle_vp_by_plate=vehicle_vp_by_plate,
+                )
+            st.session_state.contract_result = result
+        except Exception as e:
+            st.error(f"Erreur moteur Contract : {e}")
+            st.session_state.contract_result = None
+
+    result = st.session_state.get("contract_result")
+    if result is None:
+        return
+
+    # --- 4. Result ---
+    st.markdown("### 4. Résultat")
+    df = result.df
+    col_a, col_b, col_c, col_d = st.columns(4)
+    col_a.metric("Contrats produits", len(df))
+    col_b.metric("Conflits détectés", len(result.conflicts_by_cell or {}))
+    col_c.metric("Contrats orphelins", len(result.orphan_df) if result.orphan_df is not None else 0)
+    col_d.metric("Colonnes non identifiées", len(result.unknown_column_requests or []))
+
+    st.dataframe(df, use_container_width=True)
+
+    if result.issues:
+        st.markdown(f"#### ⚠️ {len(result.issues)} alerte(s)")
+        issues_rows = [
+            {"plaque": i.plate, "numéro": getattr(i, "number", ""),
+             "champ": i.field, "source": i.source, "avertissement": i.warning}
+            for i in result.issues
+        ]
+        st.dataframe(pd.DataFrame(issues_rows), use_container_width=True, hide_index=True)
+
+    if result.orphan_df is not None and not result.orphan_df.empty:
+        st.markdown(f"#### 👻 {len(result.orphan_df)} contrat(s) orphelin(s)")
+        st.caption(
+            "Ces contrats sont présents dans un fichier loueur mais absents du "
+            "fichier client. Ils seront listés dans l'onglet `orphelins` du "
+            "rapport d'erreurs Contract."
+        )
+        st.dataframe(result.orphan_df, use_container_width=True)
+
+    # --- 5. Unknown columns UI (Jalon 4.1.7) ---
+    if result.unknown_column_requests:
+        _render_contract_unknown_columns_ui(result.unknown_column_requests, contract_files)
+
+    # --- 6. Unified download (same button as Vehicle tab) ---
+    _render_unified_download()
+
+
+def _extract_vp_from_vehicle_result(vehicle_result) -> dict[str, bool]:
+    """Inspect Vehicle engine output and return {plate_norm: is_vp} for the
+    Contract engine's isHT post-pass. Returns empty dict if no result."""
+    if vehicle_result is None or vehicle_result.df is None:
+        return {}
+    df = vehicle_result.df
+    if "usage" not in df.columns:
+        return {}
+    out: dict[str, bool] = {}
+    plate_col = "registrationPlate" if "registrationPlate" in df.columns else None
+    if plate_col is None:
+        return {}
+    from src.normalizers import plate_for_matching
+    for _, row in df.iterrows():
+        p = plate_for_matching(row.get(plate_col))
+        if not p:
+            continue
+        usage = str(row.get("usage") or "").strip().lower()
+        # private → VP ; utility/service → non-VP
+        if usage == "private":
+            out[p] = True
+        elif usage in ("utility", "service"):
+            out[p] = False
+    return out
+
+
+def _render_contract_unknown_columns_ui(requests: list, contract_files: dict) -> None:
+    """Ask the user to resolve the mandatory fields the engine couldn't fill.
+
+    On validation we persist via `unknown_columns.register_learned_column`
+    so the next run on a similar file auto-resolves. The resolved picks are
+    also mirrored in session state so the user can re-run immediately.
+    """
+    st.markdown("### 🧩 Colonnes non identifiées")
+    st.caption(
+        "Pour ces champs obligatoires, le moteur n'a pas pu repérer la colonne source. "
+        "Choisis la bonne colonne une fois — l'app la retient pour les prochains imports."
+    )
+    patterns_path = Path(__file__).parent / "src" / "rules" / "learned_patterns.yml"
+    user_email = st.session_state.get("current_user") or _current_user_email()
+
+    # Map slug → list of available columns (picked from the corresponding file df)
+    cols_by_slug: dict[str, list[str]] = {}
+    df_by_slug: dict[str, pd.DataFrame] = {}
+    for key, info in contract_files.items():
+        slug = info.get("slug")
+        if not slug:
+            continue
+        df = info.get("df")
+        if df is None or df.empty:
+            continue
+        cols_by_slug[slug] = [str(c) for c in df.columns]
+        df_by_slug[slug] = df
+
+    for req in requests:
+        field = req.get("field") if isinstance(req, dict) else req.field
+        plate = req.get("plate") if isinstance(req, dict) else req.plate
+        number = req.get("number") if isinstance(req, dict) else req.number
+        candidates = req.get("candidate_sources") if isinstance(req, dict) else req.candidate_sources
+        hint = req.get("hint") if isinstance(req, dict) else req.hint
+
+        available_slugs = [s for s in candidates if s in cols_by_slug] or (["client_file"] if "client_file" in cols_by_slug else [])
+        if not available_slugs:
+            st.warning(f"Aucune source chargée ne peut porter `{field}` ({plate} / {number}).")
+            continue
+
+        with st.container(border=True):
+            st.markdown(f"**Champ manquant : `{field}`** — contrat {plate} / {number}")
+            if hint:
+                st.caption(f"💡 {hint}")
+            pick_slug = st.selectbox(
+                "Source",
+                options=available_slugs,
+                key=f"unk_slug_{field}_{plate}_{number}",
+            )
+            available_cols = [""] + cols_by_slug.get(pick_slug, [])
+            prev = st.session_state.contract_unknown_resolved.get((pick_slug, field), "")
+            default_idx = available_cols.index(prev) if prev in available_cols else 0
+            pick_col = st.selectbox(
+                "Colonne",
+                options=available_cols,
+                index=default_idx,
+                key=f"unk_col_{field}_{plate}_{number}",
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("💾 Mémoriser + appliquer",
+                             key=f"unk_save_{field}_{plate}_{number}",
+                             use_container_width=True,
+                             type="primary",
+                             disabled=not pick_col):
+                    try:
+                        unkcol.register_learned_column(
+                            patterns_path,
+                            table="contract",
+                            source_slug=pick_slug,
+                            field_name=field,
+                            column=pick_col,
+                            source_df=df_by_slug.get(pick_slug),
+                            learned_by=user_email,
+                        )
+                        st.session_state.contract_unknown_resolved[(pick_slug, field)] = pick_col
+                        st.success(f"✓ `{field}` ← `{pick_col}` mémorisé. Relance le moteur pour appliquer.")
+                        # Best-effort commit on GitHub (same pattern as value_mappings)
+                        try:
+                            if gh.is_configured():
+                                yml_text = patterns_path.read_text(encoding="utf-8")
+                                gh.save_learned_patterns_yaml(
+                                    yml_text,
+                                    commit_message=f"learned_patterns: contract.{pick_slug}.{field} = {pick_col}",
+                                    author_email=user_email,
+                                )
+                        except Exception:
+                            pass  # GitHub commit is best-effort
+                    except Exception as e:
+                        st.error(f"Échec sauvegarde : {e}")
+            with c2:
+                if (pick_slug, field) in st.session_state.contract_unknown_resolved:
+                    if st.button("↺ Oublier ce mapping",
+                                 key=f"unk_forget_{field}_{plate}_{number}",
+                                 use_container_width=True):
+                        st.session_state.contract_unknown_resolved.pop((pick_slug, field), None)
+                        st.rerun()
 
 
 # ========== Rules editor page ==========
