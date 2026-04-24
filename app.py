@@ -507,14 +507,12 @@ def _init_state():
         # Shape: {table_slug: {field_name: [source_slug_in_priority_order]}}
         "rules_overrides": {},
         "rules_active_table": "vehicle",
-        # --- Contract engine (Jalon 4.2) ---
-        # Parallel state to engine_files / engine_result, scoped to Contract.
-        # PDFs and xlsx/csv live in the same dict; PDFs keep a parsed df
-        # produced by pdf_parser (one row per (plate, number)).
-        "contract_files": {},               # {key: {"df", "filename", "sheet_name", "slug", ...}}
-        "contract_uploaded_sig": None,
+        # --- Contract engine (Jalon 4.2.2) ---
+        # Contract shares `engine_files` with the Vehicle tab — a single uploader
+        # populates both tables, and the Contract engine simply ignores slugs
+        # that aren't declared in contract.yml. Only result + user picks are
+        # per-table.
         "contract_result": None,            # ContractEngineResult or None
-        "contract_overrides": {},           # {(file_key, field): source_col} for client_file Contract
         # Resolved answers from the "colonne non identifiée" UI. Kept in memory
         # until the user validates — then persisted via register_learned_column.
         "contract_unknown_resolved": {},    # {(source_slug, field_name): column}
@@ -1100,7 +1098,7 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
         else:
             needs_action.append((_key, _info))
 
-    st.markdown("### 3. Mapping des colonnes")
+    st.markdown("#### Mapping des colonnes")
     if recognized_auto and not needs_action:
         st.caption(
             "Tous tes fichiers ont été reconnus automatiquement grâce à la "
@@ -1678,21 +1676,31 @@ def _fleet_segmentation_dialog():
     }
 
 
-def _render_vehicle_engine_subpage():
-    st.header("🚗 Moteur de règles — Véhicules (beta)")
-    st.caption(
-        "Dépose les fichiers reçus pour un client. Le moteur applique les règles "
-        "déclarées dans `src/rules/vehicle.yml` et produit le CSV Vehicle Revio. "
-        "Les fichiers marqués **`client_file`** ou **`autre_loueur_etat_parc`** "
-        "ont besoin d'un mapping manuel (IA + revue) car leurs colonnes ne sont "
-        "pas connues à l'avance."
-    )
+# ========== Shared engine uploader (Jalon 4.2.2) ==========
+def _render_engine_uploader() -> None:
+    """Single file_uploader feeding BOTH the Vehicle and Contract tabs.
 
-    # --- 1. Upload ---
+    Accepts PDF (factures loueurs) + CSV / XLSX (EP, client_file, API
+    plaques, …). PDFs are dispatched to ``pdf_parser.parse_factures_to_dataframe``
+    with a lessor hint auto-detected from the filename. Tabular files go
+    through ``load_tabular`` + ``detect()`` + learned-patterns fallback —
+    same logic as before, just unified.
+
+    All parsed files land in ``st.session_state.engine_files`` keyed by
+    ``filename::sheet_name`` (xlsx) or ``filename`` (pdf/csv). Any
+    previously-computed Vehicle / Contract results are invalidated when
+    the upload list changes.
+    """
     st.markdown("### 1. Upload des fichiers")
+    st.caption(
+        "Dépose ici **tous** les fichiers reçus pour le client (PDF factures loueurs, "
+        "états de parc, fichier client, API plaques…). Chaque fichier alimente "
+        "automatiquement la table à laquelle il correspond — un EP Ayvens ne se "
+        "dépose qu'une seule fois et nourrit à la fois Véhicules et Contrats."
+    )
     uploaded = st.file_uploader(
-        "Fichiers CSV / XLSX (loueurs, API Plaques, fichier client)",
-        type=["csv", "xlsx", "xls", "xlsm"],
+        "Fichiers PDF / CSV / XLSX",
+        type=["pdf", "csv", "xlsx", "xls", "xlsm"],
         accept_multiple_files=True,
         key="engine_uploader",
     )
@@ -1705,116 +1713,163 @@ def _render_vehicle_engine_subpage():
         (getattr(f, "name", ""), getattr(f, "size", 0)) for f in (uploaded or [])
     )
     last_sig = st.session_state.get("engine_uploaded_sig")
-
-    if uploaded and current_sig != last_sig:
-        new_files: dict = {}
-        # Reset per-file column-mapping overrides up front: file_keys are
-        # specific to this upload batch, and stale keys from the previous
-        # batch would linger otherwise. We re-populate below for any file
-        # that matches a learned pattern with a stored column_mapping.
-        st.session_state.engine_overrides = {}
-        # Clear any per-file "edit mode" flags from the previous upload batch
-        # (Jalon 2.6) and any lingering pending-pattern previews — otherwise
-        # stale keys would keep phantom cards open across different files.
-        for _stale_key in [
-            k for k in list(st.session_state.keys())
-            if isinstance(k, str) and (
-                k.startswith("engine_edit_recognized_")
-                or k.startswith("engine_pending_pattern_")
-                or k.startswith("engine_snippet_")
-            )
-        ]:
-            st.session_state.pop(_stale_key, None)
-        # Load the learned-patterns memory once per upload batch. Used as a
-        # fallback when the hard-coded detector can't identify a file — typical
-        # case: a new lessor's "état de parc" whose signature we memorised on
-        # a previous onboarding.
-        _patterns = lp.load_patterns()
-        _learned_hits: list[str] = []
-        for up in uploaded:
-            try:
-                pairs = load_tabular(up)
-            except Exception as e:
-                st.error(f"Impossible de lire {up.name}: {e}")
-                continue
-            for sheet_name, df in pairs:
-                if df.empty or df.shape[1] < 2:
-                    continue
-                key = f"{up.name}::{sheet_name}" if sheet_name else up.name
-                detected = detect(up.name, df, sheet_name=sheet_name or None)
-                default_slug = DETECTOR_TO_YAML_SLUG.get(detected.source_type, "client_file")
-                learned_match = None
-                # Fire the learned-pattern fallback ONLY when the detector fell
-                # back to client_file (our catch-all). An explicit detection
-                # (api_plaques, ayvens_*, etc.) always wins over the memory.
-                if default_slug == "client_file" and _patterns:
-                    learned_match = lp.match_pattern(
-                        up.name, [str(c) for c in df.columns], _patterns
-                    )
-                    if learned_match is not None:
-                        default_slug = learned_match.slug
-                        _learned_hits.append(f"{up.name} → `{learned_match.slug}`")
-
-                # If a pattern matched AND carries a column_mapping, hydrate
-                # engine_overrides so the rules engine can read this file
-                # with no user intervention — no IA call, no manual picks.
-                # We only keep mappings that point to columns actually
-                # present in the df (safety against a pattern saved with a
-                # column that later got renamed by the lessor).
-                mapping_applied_count = 0
-                if learned_match is not None and learned_match.column_mapping:
-                    valid_cols = {str(c) for c in df.columns}
-                    for field_name, src_col in learned_match.column_mapping.items():
-                        if src_col and src_col in valid_cols:
-                            st.session_state.engine_overrides[(key, field_name)] = src_col
-                            mapping_applied_count += 1
-
-                new_files[key] = {
-                    "df": df,
-                    "filename": up.name,
-                    "sheet_name": sheet_name,
-                    "slug": default_slug,
-                    "detected_type": detected.source_type,
-                    "detected_reason": detected.reason,
-                    "learned_match_id": learned_match.id if learned_match else None,
-                    "learned_match_hint": learned_match.loueur_hint if learned_match else None,
-                    "learned_mapping_applied_count": mapping_applied_count,
-                }
-        st.session_state.engine_files = new_files
-        st.session_state.engine_result = None  # invalidate previous run
-        st.session_state.engine_uploaded_sig = current_sig
-        st.success(f"{len(new_files)} fichier(s) chargé(s).")
-        if _learned_hits:
-            st.info(
-                "🧠 **Format reconnu depuis la mémoire** — "
-                + " · ".join(_learned_hits)
-            )
-
-    engine_files = st.session_state.engine_files
-    if not engine_files:
-        st.info("Aucun fichier chargé.")
+    if not uploaded or current_sig == last_sig:
         return
 
-    # --- 2. Type per file (slug override) — grouped by slug ---
+    new_files: dict = {}
+    # Reset per-file column-mapping overrides up front: file_keys are
+    # specific to this upload batch, and stale keys from the previous
+    # batch would linger otherwise. We re-populate below for any file
+    # that matches a learned pattern with a stored column_mapping.
+    st.session_state.engine_overrides = {}
+    # Clear any per-file "edit mode" flags from the previous upload batch
+    # (Jalon 2.6) and any lingering pending-pattern previews.
+    for _stale_key in [
+        k for k in list(st.session_state.keys())
+        if isinstance(k, str) and (
+            k.startswith("engine_edit_recognized_")
+            or k.startswith("engine_pending_pattern_")
+            or k.startswith("engine_snippet_")
+        )
+    ]:
+        st.session_state.pop(_stale_key, None)
+
+    # Lazy-load the rubriques yaml (for PDF classification). Safe if missing.
+    rub_path = Path(__file__).parent / "src" / "rules" / "rubriques_facture.yml"
+    whitelist, blacklist = [], []
+    if rub_path.exists():
+        try:
+            import yaml
+            rub = yaml.safe_load(rub_path.read_text(encoding="utf-8")) or {}
+            whitelist = rub.get("whitelist", [])
+            blacklist = rub.get("blacklist", [])
+        except Exception as e:
+            st.warning(f"Impossible de lire rubriques_facture.yml : {e}")
+
+    _patterns = lp.load_patterns()
+    _learned_hits: list[str] = []
+
+    for up in uploaded:
+        filename = getattr(up, "name", "uploaded")
+        lower = filename.lower()
+
+        # --- PDF branch ---
+        if lower.endswith(".pdf"):
+            try:
+                import tempfile, os as _os
+                data = up.read() if hasattr(up, "read") else open(up, "rb").read()
+                with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
+                    tf.write(data)
+                    tmp_path = tf.name
+                lessor_hint = None
+                if "arval" in lower:
+                    lessor_hint = "arval"
+                elif "ayvens" in lower or "ald" in lower:
+                    lessor_hint = "ayvens"
+                df = pdfp.parse_factures_to_dataframe(
+                    [tmp_path],
+                    whitelist=whitelist,
+                    blacklist=blacklist,
+                    lessor_hint=lessor_hint,
+                )
+                try:
+                    _os.unlink(tmp_path)
+                except Exception:
+                    pass
+            except Exception as e:
+                st.error(f"Échec parsing PDF {filename}: {e}")
+                continue
+            slug = f"{lessor_hint or 'arval'}_facture_pdf"
+            key = filename
+            new_files[key] = {
+                "df": df,
+                "filename": filename,
+                "sheet_name": "",
+                "slug": slug,
+                "detected_type": slug,
+                "detected_reason": "PDF parsé",
+                "is_pdf": True,
+                "learned_match_id": None,
+                "learned_match_hint": None,
+                "learned_mapping_applied_count": 0,
+            }
+            continue
+
+        # --- Tabular branch (CSV / XLSX) ---
+        try:
+            pairs = load_tabular(up)
+        except Exception as e:
+            st.error(f"Impossible de lire {filename}: {e}")
+            continue
+        for sheet_name, df in pairs:
+            if df.empty or df.shape[1] < 2:
+                continue
+            key = f"{filename}::{sheet_name}" if sheet_name else filename
+            detected = detect(filename, df, sheet_name=sheet_name or None)
+            default_slug = DETECTOR_TO_YAML_SLUG.get(detected.source_type, "client_file")
+            learned_match = None
+            if default_slug == "client_file" and _patterns:
+                learned_match = lp.match_pattern(
+                    filename, [str(c) for c in df.columns], _patterns
+                )
+                if learned_match is not None:
+                    default_slug = learned_match.slug
+                    _learned_hits.append(f"{filename} → `{learned_match.slug}`")
+
+            mapping_applied_count = 0
+            if learned_match is not None and learned_match.column_mapping:
+                valid_cols = {str(c) for c in df.columns}
+                for field_name, src_col in learned_match.column_mapping.items():
+                    if src_col and src_col in valid_cols:
+                        st.session_state.engine_overrides[(key, field_name)] = src_col
+                        mapping_applied_count += 1
+
+            new_files[key] = {
+                "df": df,
+                "filename": filename,
+                "sheet_name": sheet_name,
+                "slug": default_slug,
+                "detected_type": detected.source_type,
+                "detected_reason": detected.reason,
+                "is_pdf": False,
+                "learned_match_id": learned_match.id if learned_match else None,
+                "learned_match_hint": learned_match.loueur_hint if learned_match else None,
+                "learned_mapping_applied_count": mapping_applied_count,
+            }
+
+    st.session_state.engine_files = new_files
+    st.session_state.engine_result = None        # invalidate Vehicle result
+    st.session_state.contract_result = None      # invalidate Contract result
+    st.session_state.engine_uploaded_sig = current_sig
+    st.success(f"{len(new_files)} fichier(s) chargé(s).")
+    if _learned_hits:
+        st.info(
+            "🧠 **Format reconnu depuis la mémoire** — "
+            + " · ".join(_learned_hits)
+        )
+
+
+# ========== Shared types-detected section (Jalon 4.2.2) ==========
+def _render_engine_types_section(engine_files: dict) -> None:
+    """Group loaded files by slug, show per-file selector + preview.
+
+    Works for PDF + XLSX + CSV. The "concat auto" badge is shown when two
+    or more files share the same slug (they'll be concatenated with
+    `__source_file` lineage before entering the engine).
+    """
     st.markdown("### 2. Types détectés — regroupés par source")
     st.caption(
-        "Les fichiers sont regroupés par type. Si plusieurs fichiers ciblent le même "
-        "type (ex. deux exports loueurs), ils seront **concaténés automatiquement** "
-        "avant d'entrer dans le moteur, avec une colonne `__source_file` pour la "
-        "traçabilité. Tu peux corriger manuellement le type si la détection s'est "
-        "trompée — le fichier rejoindra alors le bon groupe."
+        "Les fichiers sont regroupés par type. Plusieurs fichiers du même type "
+        "(ex. deux exports loueurs) sont **concaténés automatiquement** avant "
+        "d'entrer dans le moteur (traçabilité via `__source_file`). Corrige "
+        "manuellement le type si la détection s'est trompée."
     )
 
-    # Group files by their CURRENT slug. We iterate the engine_files dict so
-    # upload order is preserved within each group (the rules engine's plate
-    # dedup is keep-first — order matters).
     files_by_slug: dict[str, list[tuple[str, dict]]] = {}
     for key, info in engine_files.items():
         slug = info.get("slug") or "client_file"
         files_by_slug.setdefault(slug, []).append((key, info))
 
-    # Render groups in SLUG_DISPLAY order so the page reads top-to-bottom in
-    # a predictable way (plaques → ayvens → arval → autres → client).
     ordered_slugs = sorted(files_by_slug.keys(), key=lambda s: slug_display(s)[2])
     for slug in ordered_slugs:
         files_in_group = files_by_slug[slug]
@@ -1823,7 +1878,6 @@ def _render_vehicle_engine_subpage():
         n_files = len(files_in_group)
 
         with st.container(border=True):
-            # Group header: emoji + human label + file count + row count
             hc1, hc2 = st.columns([5, 2])
             with hc1:
                 st.markdown(f"#### {emoji} {human_label}")
@@ -1840,27 +1894,38 @@ def _render_vehicle_engine_subpage():
                         unsafe_allow_html=True,
                     )
 
-            # File rows inside the card
             for key, info in files_in_group:
-                label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
+                label = info["filename"] + (
+                    f" [{info['sheet_name']}]" if info.get("sheet_name") else ""
+                )
                 row = st.columns([7, 1, 4])
                 with row[0]:
                     st.markdown(f"**{label}**")
-                    # Detection reason — plus a "🧠 Mémoire" badge when the
-                    # slug came from the learned-patterns fallback instead of
-                    # the hard-coded detector.
-                    badge = ""
+                    badges: list[str] = []
+                    if info.get("is_pdf"):
+                        badges.append(
+                            "<span style='background:#FEF3C7;color:#92400E;"
+                            "padding:0.08rem 0.5rem;border-radius:999px;"
+                            "font-size:0.72rem;font-weight:500;border:1px solid "
+                            "#FDE68A'>📄 PDF</span>"
+                        )
                     if info.get("learned_match_id"):
-                        badge = (
-                            "  <span style='background:#F3E8FF;color:#6B21A8;"
+                        badges.append(
+                            "<span style='background:#F3E8FF;color:#6B21A8;"
                             "padding:0.08rem 0.5rem;border-radius:999px;"
                             "font-size:0.72rem;font-weight:500;border:1px solid "
                             "#E9D5FF'>🧠 mémoire</span>"
                         )
+                    badge_html = ("  " + " ".join(badges)) if badges else ""
+                    extra = (
+                        "PDF parsé"
+                        if info.get("is_pdf")
+                        else f"détecté `{info.get('detected_type', '?')}` — "
+                             f"{info.get('detected_reason', '')}"
+                    )
                     st.markdown(
                         f"<span style='color:#64748B;font-size:0.85em'>"
-                        f"{len(info['df'])} lignes · détecté `{info['detected_type']}` — "
-                        f"{info['detected_reason']}</span>{badge}",
+                        f"{len(info['df'])} lignes · {extra}</span>{badge_html}",
                         unsafe_allow_html=True,
                     )
                 with row[1]:
@@ -1886,34 +1951,19 @@ def _render_vehicle_engine_subpage():
                         label_visibility="collapsed",
                     )
 
-    # --- 3. Column mapping for slugs whose columns aren't baked in YAML ---
-    # (client_file + autre_loueur_etat_parc). IA proposes, user reviews.
-    _render_manual_mapping_section(engine_files)
 
-    # --- 4. Run ---
-    st.markdown("### 4. Lancer le moteur")
-
-    # Show which priority overrides will be used (if any). Transparency matters
-    # so the user sees they're not running defaults.
-    vehicle_overrides: dict[str, list[str]] = (
-        st.session_state.get("rules_overrides", {}).get("vehicle", {})
-    )
-    vehicle_overrides = {k: v for k, v in vehicle_overrides.items() if v}
-    if vehicle_overrides:
-        st.info(
-            f"🎛️ **{len(vehicle_overrides)} règle(s) de priorité personnalisée(s)** seront appliquées — "
-            "cf. *⚙️ Règles d'import* dans le menu de gauche."
-        )
-
-    # --- Fleet segmentation (Jalon 3.0) — optional, doesn't affect engine run,
-    # only how the output gets sliced at download time.
+# ========== Shared fleet segmentation controls (Jalon 4.2.2) ==========
+def _render_engine_fleet_controls() -> None:
+    """Fleet button block — shared between Vehicle + Contract (same mapping
+    applies to both tables via plate)."""
     current_fleet_mapping = st.session_state.get("engine_fleet_mapping")
     fc1, fc2 = st.columns([1, 2])
     with fc1:
         if st.button(
             "🏢 Segmenter en flottes",
             use_container_width=True,
-            help="Découper l'export en un fichier par agence / centre de coût.",
+            help="Découper l'export en un fichier par agence / centre de coût "
+                 "(appliqué aux deux tables Véhicules + Contrats via la plaque).",
             key="fleet_open_dialog",
         ):
             _fleet_segmentation_dialog()
@@ -1924,7 +1974,41 @@ def _render_vehicle_engine_subpage():
             unsafe_allow_html=True,
         )
 
-    if st.button("▶️ Appliquer les règles Vehicle", type="primary", use_container_width=True):
+
+# ========== Vehicle tab body (Jalon 4.2.2) — mapping + run + results ==========
+def _render_vehicle_tab_body(engine_files: dict) -> None:
+    """Vehicle-specific workspace: manual mapping for client_file /
+    autre_loueur_etat_parc slugs, run button, and results. Assumes
+    ``engine_files`` is already populated by the shared uploader."""
+    st.caption(
+        "Applique les règles de `src/rules/vehicle.yml` et produit le CSV "
+        "Vehicle Revio. Les fichiers marqués **`client_file`** ou "
+        "**`autre_loueur_etat_parc`** ont besoin d'un mapping manuel (IA + "
+        "revue) car leurs colonnes ne sont pas connues à l'avance."
+    )
+
+    # --- Column mapping for slugs whose columns aren't baked in YAML ---
+    _render_manual_mapping_section(engine_files)
+
+    # --- Run ---
+    st.markdown("#### Lancer le moteur Véhicules")
+
+    vehicle_overrides: dict[str, list[str]] = (
+        st.session_state.get("rules_overrides", {}).get("vehicle", {})
+    )
+    vehicle_overrides = {k: v for k, v in vehicle_overrides.items() if v}
+    if vehicle_overrides:
+        st.info(
+            f"🎛️ **{len(vehicle_overrides)} règle(s) de priorité personnalisée(s)** seront appliquées — "
+            "cf. *⚙️ Règles d'import* dans le menu de gauche."
+        )
+
+    if st.button(
+        "▶️ Appliquer les règles Vehicle",
+        type="primary",
+        use_container_width=True,
+        key="engine_run_vehicle_btn",
+    ):
         # 1. Split engine_overrides into two structures:
         #    - per_file_overrides: {file_key: {field: source_col}} → used by
         #      merge_engine_sources to rename each file's columns to canonical
@@ -2030,12 +2114,12 @@ def _render_vehicle_engine_subpage():
             st.session_state.engine_result = None
             st.session_state.ai_fallback_report = None
 
-    # --- 5. Result ---
+    # --- Results ---
     result = st.session_state.engine_result
     if result is None:
         return
 
-    st.markdown("### 5. Résultat")
+    st.markdown("#### Résultat Véhicules")
     df = result.df
     col_a, col_b, col_c = st.columns(3)
     col_a.metric("Véhicules produits", len(df))
@@ -2061,14 +2145,11 @@ def _render_vehicle_engine_subpage():
         )
         st.dataframe(result.orphan_df, use_container_width=True)
 
-    # --- 5.b Normalisations (Jalon 2.7) ----------------------------------
+    # --- Normalisations (Jalon 2.7) ----------------------------------
     _render_normalizations_report(result, st.session_state.ai_fallback_report)
 
     if not result.conflicts_by_cell and not result.issues and orphan_count == 0:
         st.success("Aucune anomalie — toutes les sources se sont bien alignées ✅")
-
-    # --- 6. Download — unified pack (Vehicles + Contracts when available) ---
-    _render_unified_download()
 
 
 # ========== Unified download (shared between Vehicle + Contract tabs) ==========
@@ -2222,169 +2303,65 @@ def _build_contract_errors_xlsx(result, *, client_name: str) -> bytes:
     return buf.getvalue()
 
 
-# ========== Engine page — top wrapper with Vehicle/Contract tabs ==========
+# ========== Engine page — unified uploader + table-centric tabs (Jalon 4.2.2) ==========
 def render_engine_page():
-    """Top-level Moteur page — switches between Vehicle and Contract sub-pages
-    via tabs. The final "Télécharger pack" button lives inside each sub-page
-    (via `_render_unified_download`) and produces the SAME unified zip — so
-    the user can download from whichever tab they're on.
+    """Top-level Moteur page (Jalon 4.2.2).
+
+    Layout:
+    1. Shared file_uploader (PDF + CSV + XLSX) — one deposit, both tables.
+    2. Shared "Types détectés — regroupés par source" section.
+    3. Shared fleet segmentation controls.
+    4. Two tabs — 🚗 Véhicules and 📄 Contrats — each being its own mapping
+       + run + results workspace (no upload inside).
+    5. Shared download button producing the unified zip.
+
+    Intent (Augustin, 2026-04-22): "Un seul endroit pour déposer tous les
+    docs. Plusieurs onglets pour définir, si besoin, les mappings. Un seul
+    bouton téléchargement en bas."
     """
     st.title("🧪 Import — Moteur de règles")
+
+    _render_engine_uploader()
+    engine_files = st.session_state.get("engine_files") or {}
+    if not engine_files:
+        st.info(
+            "Dépose un ou plusieurs fichiers ci-dessus pour démarrer. "
+            "Un même fichier (ex. EP Ayvens) alimente automatiquement les tables "
+            "Véhicules **et** Contrats — pas besoin de l'envoyer deux fois."
+        )
+        return
+
+    _render_engine_types_section(engine_files)
+    _render_engine_fleet_controls()
+
     tab_v, tab_c = st.tabs(["🚗 Véhicules", "📄 Contrats"])
     with tab_v:
-        _render_vehicle_engine_subpage()
+        _render_vehicle_tab_body(engine_files)
     with tab_c:
-        _render_contract_engine_subpage()
+        _render_contract_tab_body(engine_files)
+
+    st.markdown("---")
+    _render_unified_download()
 
 
-# ========== Contract engine sub-page (Jalon 4.2) ==========
-def _render_contract_engine_subpage():
-    st.header("📄 Moteur de règles — Contrats (beta)")
+# ========== Contract tab body (Jalon 4.2.2) — run + results + unknown cols ==========
+def _render_contract_tab_body(engine_files: dict) -> None:
+    """Contract-specific workspace: run button, results, and the unknown-
+    columns UI. Assumes ``engine_files`` is already populated by the shared
+    uploader — files whose slugs aren't declared in ``contract.yml`` are
+    silently ignored by the Contract engine."""
     st.caption(
-        "Dépose les factures loueurs (PDF) + les états de parc déjà utilisés pour "
-        "les véhicules + le fichier client. Le moteur applique les règles de "
-        "`src/rules/contract.yml` et produit un CSV contrats prêt pour Revio, "
-        "clé primaire **(plaque, numéro de contrat)**."
+        "Applique les règles de `src/rules/contract.yml` et produit un CSV "
+        "contrats prêt pour Revio, clé primaire **(plaque, numéro de contrat)**. "
+        "Les factures PDF déposées en haut sont automatiquement parsées et "
+        "reconnues ici."
     )
     if not rules_io.list_available_tables():
         st.warning("contract.yml introuvable — le moteur Contract n'est pas encore configuré.")
         return
 
-    # --- 1. Upload ---
-    st.markdown("### 1. Upload des fichiers (PDF + XLSX/CSV)")
-    uploaded = st.file_uploader(
-        "Factures PDF, états de parc, fichier client",
-        type=["pdf", "csv", "xlsx", "xls", "xlsm"],
-        accept_multiple_files=True,
-        key="contract_uploader",
-    )
-    current_sig = tuple(
-        (getattr(f, "name", ""), getattr(f, "size", 0)) for f in (uploaded or [])
-    )
-    last_sig = st.session_state.get("contract_uploaded_sig")
-
-    if uploaded and current_sig != last_sig:
-        new_files: dict = {}
-        # Lazy-load the rubriques yaml (for PDF classification). Fall back to
-        # empty whitelist/blacklist if the file is missing.
-        rub_path = Path(__file__).parent / "src" / "rules" / "rubriques_facture.yml"
-        whitelist, blacklist = [], []
-        if rub_path.exists():
-            try:
-                import yaml
-                rub = yaml.safe_load(rub_path.read_text(encoding="utf-8")) or {}
-                whitelist = rub.get("whitelist", [])
-                blacklist = rub.get("blacklist", [])
-            except Exception as e:
-                st.warning(f"Impossible de lire rubriques_facture.yml : {e}")
-
-        for up in uploaded:
-            filename = getattr(up, "name", "uploaded")
-            lower = filename.lower()
-            if lower.endswith(".pdf"):
-                # Parse the PDF facture → one row per (plate, number).
-                try:
-                    import tempfile, os as _os
-                    # pdf_parser reads from disk, so stage the upload.
-                    data = up.read() if hasattr(up, "read") else open(up, "rb").read()
-                    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
-                        tf.write(data)
-                        tmp_path = tf.name
-                    # Try auto-detect lessor; default to arval (most common).
-                    lessor_hint = None
-                    low = filename.lower()
-                    if "arval" in low:
-                        lessor_hint = "arval"
-                    elif "ayvens" in low or "ald" in low:
-                        lessor_hint = "ayvens"
-                    df = pdfp.parse_factures_to_dataframe(
-                        [tmp_path],
-                        whitelist=whitelist,
-                        blacklist=blacklist,
-                        lessor_hint=lessor_hint,
-                    )
-                    try:
-                        _os.unlink(tmp_path)
-                    except Exception:
-                        pass
-                except Exception as e:
-                    st.error(f"Échec parsing PDF {filename}: {e}")
-                    continue
-                # Slug from lessor_hint (default arval)
-                slug = f"{lessor_hint or 'arval'}_facture_pdf"
-                key = filename  # PDFs don't have sheets
-                new_files[key] = {
-                    "df": df,
-                    "filename": filename,
-                    "sheet_name": "",
-                    "slug": slug,
-                    "is_pdf": True,
-                }
-            else:
-                # CSV / XLSX → use the same pipeline loader as Vehicle
-                try:
-                    pairs = load_tabular(up)
-                except Exception as e:
-                    st.error(f"Impossible de lire {filename}: {e}")
-                    continue
-                for sheet_name, df in pairs:
-                    if df.empty or df.shape[1] < 2:
-                        continue
-                    key = f"{filename}::{sheet_name}" if sheet_name else filename
-                    detected = detect(filename, df, sheet_name=sheet_name or None)
-                    default_slug = DETECTOR_TO_YAML_SLUG.get(detected.source_type, "client_file")
-                    new_files[key] = {
-                        "df": df,
-                        "filename": filename,
-                        "sheet_name": sheet_name,
-                        "slug": default_slug,
-                        "detected_type": detected.source_type,
-                        "detected_reason": detected.reason,
-                        "is_pdf": False,
-                    }
-        st.session_state.contract_files = new_files
-        st.session_state.contract_uploaded_sig = current_sig
-        st.session_state.contract_result = None
-        st.success(f"{len(new_files)} fichier(s) chargé(s) pour les contrats.")
-
-    contract_files = st.session_state.get("contract_files", {})
-    if not contract_files:
-        st.info("Aucun fichier chargé.")
-        return
-
-    # --- 2. Types detected per file (slug picker) ---
-    st.markdown("### 2. Types détectés")
-    for key, info in contract_files.items():
-        label = info["filename"] + (f" [{info['sheet_name']}]" if info.get("sheet_name") else "")
-        current = info.get("slug") or "client_file"
-        if current not in ENGINE_SOURCE_SLUGS:
-            current = "client_file"
-        row = st.columns([7, 1, 4])
-        with row[0]:
-            emoji, hlabel, _ = slug_display(current)
-            st.markdown(f"**{label}**")
-            extra = " · 📄 PDF parsé" if info.get("is_pdf") else (
-                f" · détecté `{info.get('detected_type', '?')}`"
-            )
-            st.markdown(
-                f"<span style='color:#64748B;font-size:0.85em'>"
-                f"{len(info['df'])} ligne(s){extra}</span>",
-                unsafe_allow_html=True,
-            )
-        with row[1]:
-            with st.popover("🔍", help="Aperçu", use_container_width=True):
-                st.dataframe(info["df"].head(20), use_container_width=True, hide_index=True)
-        with row[2]:
-            info["slug"] = st.selectbox(
-                "Type YAML",
-                options=ENGINE_SOURCE_SLUGS,
-                index=ENGINE_SOURCE_SLUGS.index(current),
-                key=f"contract_slug_{key}",
-                label_visibility="collapsed",
-            )
-
-    # --- 3. Run ---
-    st.markdown("### 3. Lancer le moteur Contract")
+    # --- Run ---
+    st.markdown("#### Lancer le moteur Contrats")
 
     # Carry VP info from the Vehicle result (if any) so isHT post-pass can
     # reference the canonical VP classification computed earlier.
@@ -2396,10 +2373,12 @@ def _render_contract_engine_subpage():
         )
 
     if st.button("▶️ Appliquer les règles Contract", type="primary",
-                 use_container_width=True, key="contract_run_btn"):
-        # Build source_dfs keyed by slug (concat files of same slug)
+                 use_container_width=True, key="engine_run_contract_btn"):
+        # Build source_dfs keyed by slug (concat files of same slug). The
+        # Contract engine ignores slugs it doesn't understand, so it's safe
+        # to pass the full shared engine_files here.
         source_dfs: dict = {}
-        for key, info in contract_files.items():
+        for key, info in engine_files.items():
             slug = info.get("slug")
             if not slug:
                 continue
@@ -2413,7 +2392,6 @@ def _render_contract_engine_subpage():
 
         # Apply user-resolved unknown columns (register_learned_column + overrides)
         overrides: dict[tuple[str, str], str] = {}
-        patterns_path = Path(__file__).parent / "src" / "rules" / "learned_patterns.yml"
         for (src_slug, field_name), col in st.session_state.contract_unknown_resolved.items():
             overrides[(src_slug, field_name)] = col
 
@@ -2433,8 +2411,8 @@ def _render_contract_engine_subpage():
     if result is None:
         return
 
-    # --- 4. Result ---
-    st.markdown("### 4. Résultat")
+    # --- Results ---
+    st.markdown("#### Résultat Contrats")
     df = result.df
     col_a, col_b, col_c, col_d = st.columns(4)
     col_a.metric("Contrats produits", len(df))
@@ -2445,7 +2423,7 @@ def _render_contract_engine_subpage():
     st.dataframe(df, use_container_width=True)
 
     if result.issues:
-        st.markdown(f"#### ⚠️ {len(result.issues)} alerte(s)")
+        st.markdown(f"##### ⚠️ {len(result.issues)} alerte(s)")
         issues_rows = [
             {"plaque": i.plate, "numéro": getattr(i, "number", ""),
              "champ": i.field, "source": i.source, "avertissement": i.warning}
@@ -2454,7 +2432,7 @@ def _render_contract_engine_subpage():
         st.dataframe(pd.DataFrame(issues_rows), use_container_width=True, hide_index=True)
 
     if result.orphan_df is not None and not result.orphan_df.empty:
-        st.markdown(f"#### 👻 {len(result.orphan_df)} contrat(s) orphelin(s)")
+        st.markdown(f"##### 👻 {len(result.orphan_df)} contrat(s) orphelin(s)")
         st.caption(
             "Ces contrats sont présents dans un fichier loueur mais absents du "
             "fichier client. Ils seront listés dans l'onglet `orphelins` du "
@@ -2462,12 +2440,9 @@ def _render_contract_engine_subpage():
         )
         st.dataframe(result.orphan_df, use_container_width=True)
 
-    # --- 5. Unknown columns UI (Jalon 4.1.7) ---
+    # --- Unknown columns UI (Jalon 4.1.7) ---
     if result.unknown_column_requests:
-        _render_contract_unknown_columns_ui(result.unknown_column_requests, contract_files)
-
-    # --- 6. Unified download (same button as Vehicle tab) ---
-    _render_unified_download()
+        _render_contract_unknown_columns_ui(result.unknown_column_requests, engine_files)
 
 
 def _extract_vp_from_vehicle_result(vehicle_result) -> dict[str, bool]:
@@ -2496,14 +2471,17 @@ def _extract_vp_from_vehicle_result(vehicle_result) -> dict[str, bool]:
     return out
 
 
-def _render_contract_unknown_columns_ui(requests: list, contract_files: dict) -> None:
+def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> None:
     """Ask the user to resolve the mandatory fields the engine couldn't fill.
 
     On validation we persist via `unknown_columns.register_learned_column`
     so the next run on a similar file auto-resolves. The resolved picks are
     also mirrored in session state so the user can re-run immediately.
+
+    `engine_files` is the unified Jalon 4.2.2 dict (same shape as before,
+    shared between Vehicle + Contract tabs).
     """
-    st.markdown("### 🧩 Colonnes non identifiées")
+    st.markdown("##### 🧩 Colonnes non identifiées")
     st.caption(
         "Pour ces champs obligatoires, le moteur n'a pas pu repérer la colonne source. "
         "Choisis la bonne colonne une fois — l'app la retient pour les prochains imports."
@@ -2514,7 +2492,7 @@ def _render_contract_unknown_columns_ui(requests: list, contract_files: dict) ->
     # Map slug → list of available columns (picked from the corresponding file df)
     cols_by_slug: dict[str, list[str]] = {}
     df_by_slug: dict[str, pd.DataFrame] = {}
-    for key, info in contract_files.items():
+    for key, info in engine_files.items():
         slug = info.get("slug")
         if not slug:
             continue
