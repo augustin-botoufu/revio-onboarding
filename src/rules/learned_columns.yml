@@ -1,82 +1,19 @@
-patterns:
-  contract:
-    ayvens_aen:
-      plate:
-        column: Immatriculation
-        learned_on: '2026-04-24T15:12:53+00:00'
-        learned_by: unknown
-        sample_values:
-        - GM-234-LM
-        - GQ-213-VT
-      vehicleValue:
-        column: Prix achat net TTC
-        learned_on: '2026-04-24T15:12:53+00:00'
-        learned_by: unknown
-        sample_values:
-        - 27132,31
-        - '20553'
-    ayvens_etat_parc:
-      plate:
-        column: N° Immat
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - GQ-213-VT
-        - GT-219-AB
-        - GZ-023-MB
-      number:
-        column: N° Contrat
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - TW90324
-        - TW90310
-        - TW79571
-      durationMonths:
-        column: Durée contrat
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - '37'
-        - '49'
-        - '37'
-      startDate:
-        column: Date début contrat
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - '2023-08-30 00:00:00'
-        - '2023-12-20 00:00:00'
-        - '2024-12-16 00:00:00'
-      endDate:
-        column: Date fin contrat
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - '2026-09-30 00:00:00'
-        - '2028-01-20 00:00:00'
-        - '2028-01-16 00:00:00'
-      contractedMileage:
-        column: Km contrat
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - '120000'
-        - '62000'
-        - '115000'
-      maxMileage:
-        column: KM tech Max
-        learned_on: '2026-04-24T15:14:44+00:00'
-        learned_by: unknown
-        sample_values:
-        - '180000'
-        - '180000'
-        - '180000'
-      totalPrice:
-        column: Loyer périodique
-        learned_on: '2026-04-24T15:14:45+00:00'
-        learned_by: unknown
-        sample_values:
-        - '518.66'
-        - '364.95'
-        - '416.46'
+# Learned column overrides — mappings persistés via le bouton "💾 Mémoriser
+# ce format" de l'onglet Contract (et plus tard Vehicle, si on unifie).
+#
+# Format (écrit par src/unknown_columns.py::register_learned_column) :
+#
+#   patterns:
+#     <table>:
+#       <source_slug>:
+#         <field_name>:
+#           column: <header_source_choisi_par_user>
+#           learned_on: <ISO-8601>
+#           learned_by: <email>
+#           sample_values: [<v1>, <v2>, <v3>]
+#
+# Ce fichier est DISTINCT de `learned_patterns.yml` (qui stocke les
+# signatures de détection de format Vehicle, format liste), pour éviter le
+# conflit de shape qui crashait Mémoriser en 4.2.7.
+
+patterns: {}

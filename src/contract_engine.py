@@ -550,26 +550,50 @@ def _extract_vp_from_ep_sources(
     """Scan EP-type sources for a VP indicator column.
 
     Returns dict: key → (is_vp_bool, source_slug). First EP hit wins.
+
+    (Jalon 4.2.9) Headers ET valeurs sont matchés de façon tolérante
+    (substring) pour couvrir les variantes terrain ("Genre du véhicule",
+    "Catégorie", "Type (VP/VU)", valeurs "Voiture particulière" avec
+    accent, "Utilitaire léger", etc.). Avant 4.2.9 on n'acceptait qu'une
+    liste fermée exacte → isHT restait quasi toujours vide.
     """
     out: dict[str, tuple[bool, str]] = {}
     EP_SLUGS = ["ayvens_etat_parc", "autre_loueur_ep"]
-    VP_HEADERS = ["genre", "type véhicule", "type vehicule", "catégorie véhicule",
-                  "vp", "vu", "vehicle_type"]
+    # Substrings — on matche si l'un est présent dans le header normalisé.
+    VP_HEADER_HINTS = (
+        "genre", "type véhicule", "type vehicule", "catégorie", "categorie",
+        "vp/vu", "vp / vu", "vehicle_type", "type de véhicule", "type de vehicule",
+        "classification", "nature du véhicule", "nature du vehicule",
+    )
+    # Substrings — on matche si l'un est présent dans la valeur normalisée.
+    VP_VALUE_HINTS = ("vp", "particul", "tourisme")
+    VU_VALUE_HINTS = ("vu", "utilit", "commercial", "pl", "camion", "fourgon")
+
+    def _find_vp_col(df: pd.DataFrame) -> Optional[str]:
+        for c in df.columns:
+            low = str(c).strip().lower()
+            for h in VP_HEADER_HINTS:
+                if h in low:
+                    return c
+        return None
+
     for slug in EP_SLUGS:
         df = indexed.get(slug)
         if df is None or df.empty:
             continue
-        col = _find_column(df, VP_HEADERS)
+        col = _find_vp_col(df)
         if col is None:
             continue
         for key, val in df[col].items():
             if key in out or _is_null(val):
                 continue
-            s = str(val).strip().upper()
-            if s in {"VP", "PARTICULIER", "TOURISME", "VOITURE PARTICULIERE"}:
-                out[key] = (True, slug)
-            elif s in {"VU", "UTILITAIRE", "COMMERCIAL", "VP+", "PL"}:
+            low = str(val).strip().lower()
+            # VU first (plus spécifique : "VU" est un substring de "vur",
+            # mais on préfère VU-over-VP quand les 2 matchent par sécurité).
+            if any(h in low for h in VU_VALUE_HINTS):
                 out[key] = (False, slug)
+            elif any(h in low for h in VP_VALUE_HINTS):
+                out[key] = (True, slug)
     return out
 
 

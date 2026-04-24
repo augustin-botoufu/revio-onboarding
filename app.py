@@ -2281,9 +2281,21 @@ def _build_contract_errors_xlsx(result, *, client_name: str) -> bytes:
     for (key, field), conflicts in (result.conflicts_by_cell or {}).items():
         plate, _, number = str(key).partition("|")
         winner_src = (result.source_by_cell or {}).get((key, field))
+        # (Jalon 4.2.9) conflicts is list[tuple[source, value]] (cf. contract_engine
+        # line 413). On gère tuple ET dict par sécurité si le schéma évolue.
+        conflict_strs = []
+        for c in conflicts or []:
+            if isinstance(c, tuple) and len(c) >= 2:
+                conflict_strs.append(f"{c[0]}={c[1]}")
+            elif isinstance(c, dict):
+                conflict_strs.append(
+                    f"{c.get('source')}={c.get('value')} ({c.get('reason', '')})"
+                )
+            else:
+                conflict_strs.append(str(c))
         ws2.append([
             plate, number, field, str(winner_src),
-            " | ".join(f"{c.get('source')}={c.get('value')} ({c.get('reason', '')})" for c in conflicts),
+            " | ".join(conflict_strs),
         ])
 
     # Sheet 3: orphelins (contrats dans factures/EP loueur mais absents client_file)
