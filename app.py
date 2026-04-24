@@ -2346,25 +2346,32 @@ def render_engine_page():
 # ========== Contract tab body (Jalon 4.2.2) — run + results + unknown cols ==========
 def _build_contract_source_dfs(engine_files: dict) -> dict:
     """Flatten ``engine_files`` into ``{slug: concatenated_df}`` for the
-    Contract engine. Files with no slug or empty dataframes are dropped.
-    Multiple files sharing a slug are concatenated (same behaviour as the
-    Vehicle tab's merge_engine_sources but without per-field renames — the
-    Contract engine handles column detection itself via heuristics)."""
-    source_dfs: dict = {}
-    for _key, info in engine_files.items():
-        slug = info.get("slug")
-        if not slug:
+    Contract engine.
+
+    Jalon 4.2.6 — on ré-utilise ``merge_engine_sources`` avec les
+    ``per_file_overrides`` issus de l'onglet Véhicules, de manière à
+    honorer les mappings que l'utilisateur a déjà faits côté Vehicle
+    (typiquement ``registrationPlate`` sur la colonne ``Immat`` du client
+    file). Ça évite de redemander le même mapping côté Contract
+    (complaint #2 d'Augustin). Les colonnes canoniques sortent en
+    ``__map__<field>`` et le moteur Contract sait les lire via
+    ``_find_plate_column`` / ``_find_column``.
+    """
+    # Collect per-file mappings the user has already committed in Vehicle.
+    per_file_overrides: dict[str, dict[str, str]] = {}
+    engine_file_keys = set(engine_files.keys())
+    for (scope, field_name), src_col in st.session_state.get(
+        "engine_overrides", {}
+    ).items():
+        if not src_col:
             continue
-        df = info.get("df")
-        if df is None or df.empty:
-            continue
-        if slug in source_dfs:
-            source_dfs[slug] = pd.concat(
-                [source_dfs[slug], df], ignore_index=True, sort=False,
-            )
-        else:
-            source_dfs[slug] = df.copy()
-    return source_dfs
+        if scope in engine_file_keys:
+            per_file_overrides.setdefault(scope, {})[field_name] = src_col
+
+    merged = merge_engine_sources(
+        engine_files, per_file_overrides=per_file_overrides
+    )
+    return {slug: ms.df for slug, ms in merged.items()}
 
 
 def _render_contract_tab_body(engine_files: dict) -> None:
@@ -2429,16 +2436,23 @@ def _render_contract_tab_body(engine_files: dict) -> None:
     )
     probe_issues = probe_result.issues if probe_result is not None else []
 
-    # Surface plate-only-mode warning (from probe) so the user sees it
-    # upfront rather than after Appliquer.
-    plate_only_warnings = [
+    # Surface engine-level warnings from the probe so the user sees them
+    # upfront rather than after Appliquer. Plate-primary indexing (Jalon
+    # 4.2.6) surfaces two kinds of pre-run warnings :
+    #   · ``field="plate"`` + ``source=<slug>`` — doublons de plaque dans un
+    #     fichier loueur (seule la 1re ligne est retenue).
+    #   · ``source="__engine__"`` — import sans fichier client (parc dérivé
+    #     de l'union des loueurs).
+    pre_run_warnings = [
         i for i in probe_issues
-        if getattr(i, "source", "") == "__engine__" and "plaque seule" in (getattr(i, "warning", "") or "")
-    ]
-    if plate_only_warnings:
-        st.warning(
-            "🔑 " + plate_only_warnings[0].warning
+        if getattr(i, "warning", None)
+        and (
+            getattr(i, "source", "") == "__engine__"
+            or getattr(i, "field", "") == "plate"
         )
+    ]
+    for w in pre_run_warnings:
+        st.warning("⚠️ " + w.warning)
 
     if probe_unknowns:
         st.markdown("#### 🧩 Mapping manuel — champs obligatoires non reconnus")
@@ -2545,39 +2559,38 @@ def _extract_vp_from_vehicle_result(vehicle_result) -> dict[str, bool]:
 
 
 def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> None:
-    """Ask the user to resolve the mandatory fields the engine couldn't fill.
+    """Mapping UI for Contract tab — **grouped by FILE** (Jalon 4.2.6).
 
-    On validation we persist via `unknown_columns.register_learned_column`
-    so the next run on a similar file auto-resolves. The resolved picks are
-    also mirrored in session state so the user can re-run immediately.
+    Parité Vehicle tab : 1 expander par fichier, avec tous les champs
+    mappables à l'intérieur. Raison : Augustin a remonté que le grouping
+    par champ "prend de la place et ça sert à rien. On a toujours fait :
+    client file → les champs à matcher, puis autre fichier → …"
 
-    `engine_files` is the unified Jalon 4.2.2 dict (same shape as before,
-    shared between Vehicle + Contract tabs).
+    Pseudo-sources (``backoffice``, ``ep_loueur``, ``api_plaque``,
+    ``derived``, ``rule_engine``) qui n'ont pas de fichier uploadé
+    correspondant sont filtrées : pas de carte pour un champ qu'aucune
+    source réelle ne peut porter.
     """
-    st.markdown("##### 🧩 Colonnes non identifiées")
-    st.caption(
-        "Pour ces champs obligatoires, le moteur n'a pas pu repérer la colonne source. "
-        "Choisis la bonne colonne une fois — l'app la retient pour les prochains imports."
-    )
     patterns_path = Path(__file__).parent / "src" / "rules" / "learned_patterns.yml"
     user_email = st.session_state.get("current_user") or _current_user_email()
 
-    # Map slug → list of available columns (picked from the corresponding file df)
-    cols_by_slug: dict[str, list[str]] = {}
-    df_by_slug: dict[str, pd.DataFrame] = {}
+    PSEUDO_SLUGS = {"backoffice", "ep_loueur", "api_plaque", "derived",
+                    "rule_engine", "*"}
+
+    # --- 1. Map slug → file info (there may be multiple files sharing a slug
+    #       for autre_loueur_* ; we keep all of them so each file gets its
+    #       own expander).
+    files_by_slug: dict[str, list[tuple[str, dict]]] = {}
     for key, info in engine_files.items():
         slug = info.get("slug")
-        if not slug:
+        if not slug or slug in PSEUDO_SLUGS:
             continue
         df = info.get("df")
         if df is None or df.empty:
             continue
-        cols_by_slug[slug] = [str(c) for c in df.columns]
-        df_by_slug[slug] = df
+        files_by_slug.setdefault(slug, []).append((key, info))
 
-    # Dedup defensively in case older contract_engine versions still emit
-    # one request per (plate, number, field). Group by field_name and keep
-    # the largest sample_pairs / affected_count we saw.
+    # --- 2. Dedup requests by field_name (one card per field at most).
     by_field: dict[str, dict] = {}
     for req in requests:
         r = req if isinstance(req, dict) else {
@@ -2595,100 +2608,181 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
                 "hint": r.get("hint"),
                 "affected_count": r.get("affected_count", 1),
                 "total_rows": r.get("total_rows"),
-                "sample_pairs": list(r.get("sample_pairs") or [
-                    (r.get("plate"), r.get("number"))
-                ]),
             }
         else:
             prev["affected_count"] = prev.get("affected_count", 0) + r.get("affected_count", 1)
-            if len(prev["sample_pairs"]) < 3:
-                sp = r.get("sample_pairs") or [(r.get("plate"), r.get("number"))]
-                for pair in sp:
-                    if pair not in prev["sample_pairs"]:
-                        prev["sample_pairs"].append(pair)
-                    if len(prev["sample_pairs"]) >= 3:
-                        break
 
+    # --- 3. Invert: for each LOADED file, which fields can it contribute to?
+    #       A field is offerable on a file if the file's slug is in that
+    #       field's candidate_sources, OR if the slug is `client_file`
+    #       (client file is always a valid fallback for any field).
+    fields_by_file: dict[str, list[dict]] = {}  # file_key → list of fields (dicts)
+    info_by_file: dict[str, dict] = {}
     for field, req in by_field.items():
-        candidates = req.get("candidate_sources") or []
-        hint = req.get("hint")
-        affected = req.get("affected_count") or 0
-        total = req.get("total_rows")
-        samples = req.get("sample_pairs") or []
+        candidates = set(req.get("candidate_sources") or [])
+        # Drop pseudo slugs from candidates — they can't be mapped to a file.
+        real_candidates = candidates - PSEUDO_SLUGS
+        if not real_candidates:
+            continue  # no file can resolve this field (e.g. partnerId → backoffice only)
+        # Client file is always a last-resort fallback.
+        if "client_file" in files_by_slug:
+            real_candidates.add("client_file")
+        for slug in real_candidates:
+            for file_key, file_info in files_by_slug.get(slug, []):
+                fields_by_file.setdefault(file_key, []).append({
+                    **req,
+                    "slug": slug,
+                })
+                info_by_file[file_key] = file_info
 
-        available_slugs = [s for s in candidates if s in cols_by_slug] or (["client_file"] if "client_file" in cols_by_slug else [])
-        if not available_slugs:
-            st.warning(f"Aucune source chargée ne peut porter `{field}`.")
-            continue
+    # --- 4. Also list fields that NO file can resolve — surface them as info
+    #       so the user knows why they stay blank (e.g. isHT needs VP which
+    #       comes from api_plaque, partnerId needs backoffice lookup).
+    unresolvable: list[dict] = []
+    for field, req in by_field.items():
+        candidates = set(req.get("candidate_sources") or [])
+        real_candidates = candidates - PSEUDO_SLUGS
+        if not real_candidates and not any(
+            file_info.get("slug") == "client_file" for file_info in engine_files.values()
+        ):
+            unresolvable.append(req)
+        elif not real_candidates:
+            # Only pseudo-sources → can't be mapped from a file. Still worth
+            # flagging so the user knows it will come from elsewhere (backoffice
+            # index / API Plaques / derived post-pass).
+            unresolvable.append({**req, "reason": "pseudo"})
 
-        with st.container(border=True):
-            header = f"**Champ manquant : `{field}`**"
-            if total:
-                header += f" — {affected}/{total} contrats concernés"
-            elif affected:
-                header += f" — {affected} contrats concernés"
-            st.markdown(header)
-            if hint:
-                st.caption(f"💡 {hint}")
-            if samples:
-                preview = ", ".join(
-                    f"{p}/{n}" for p, n in samples if p or n
+    # --- 5. Render: one expander per file, stacked like Vehicle tab.
+    if fields_by_file:
+        st.caption(
+            "Un expander par fichier source. Pour chaque fichier on liste les "
+            "champs obligatoires que le moteur n'a pas pu remplir automatiquement — "
+            "choisis la bonne colonne et clique **Mémoriser** (GitHub garde la "
+            "préférence pour les prochains imports)."
+        )
+
+    for file_key, field_reqs in fields_by_file.items():
+        file_info = info_by_file[file_key]
+        slug = file_info.get("slug")
+        slug_label = slug_display(slug)[1] if slug else slug
+        filename = file_info.get("filename") or file_key
+        sheet = file_info.get("sheet_name")
+        df = file_info.get("df")
+        available_cols = [""] + [str(c) for c in df.columns]
+
+        header = f"🔗 **{filename}**"
+        if sheet:
+            header += f" [{sheet}]"
+        header += f" → *{slug_label}*"
+        header += f" — {len(field_reqs)} champ(s) à mapper"
+
+        with st.expander(header, expanded=True):
+            # Dedup fields — same file may have been listed twice if both its
+            # slug AND client_file fallback applied.
+            seen_fields: set[str] = set()
+            for req in field_reqs:
+                field = req["field"]
+                if field in seen_fields:
+                    continue
+                seen_fields.add(field)
+
+                affected = req.get("affected_count") or 0
+                total = req.get("total_rows")
+                hint = req.get("hint")
+
+                label = f"**`{field}`**"
+                if total:
+                    label += f" · {affected}/{total} contrats concernés"
+                st.markdown(label)
+                if hint:
+                    st.caption(f"💡 {hint}")
+
+                prev_col = st.session_state.contract_unknown_resolved.get(
+                    (slug, field), ""
                 )
-                if preview:
-                    st.caption(f"Exemples : {preview}…")
-            pick_slug = st.selectbox(
-                "Source",
-                options=available_slugs,
-                key=f"unk_slug_{field}",
-            )
-            available_cols = [""] + cols_by_slug.get(pick_slug, [])
-            prev_col = st.session_state.contract_unknown_resolved.get((pick_slug, field), "")
-            default_idx = available_cols.index(prev_col) if prev_col in available_cols else 0
-            pick_col = st.selectbox(
-                "Colonne",
-                options=available_cols,
-                index=default_idx,
-                key=f"unk_col_{field}",
-            )
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("💾 Mémoriser + appliquer",
-                             key=f"unk_save_{field}",
-                             use_container_width=True,
-                             type="primary",
-                             disabled=not pick_col):
-                    try:
-                        unkcol.register_learned_column(
-                            patterns_path,
-                            table="contract",
-                            source_slug=pick_slug,
-                            field_name=field,
-                            column=pick_col,
-                            source_df=df_by_slug.get(pick_slug),
-                            learned_by=user_email,
-                        )
-                        st.session_state.contract_unknown_resolved[(pick_slug, field)] = pick_col
-                        st.success(f"✓ `{field}` ← `{pick_col}` mémorisé. Relance le moteur pour appliquer.")
-                        # Best-effort commit on GitHub (same pattern as value_mappings)
+                default_idx = (
+                    available_cols.index(prev_col) if prev_col in available_cols else 0
+                )
+                pick_col = st.selectbox(
+                    "Colonne source",
+                    options=available_cols,
+                    index=default_idx,
+                    key=f"unk_col_{slug}_{field}_{file_key}",
+                    label_visibility="collapsed",
+                )
+                c1, c2 = st.columns([3, 1])
+                with c1:
+                    if st.button(
+                        f"💾 Mémoriser `{field}` ← `{pick_col or '…'}`",
+                        key=f"unk_save_{slug}_{field}_{file_key}",
+                        use_container_width=True,
+                        type="primary",
+                        disabled=not pick_col,
+                    ):
                         try:
-                            if gh.is_configured():
-                                yml_text = patterns_path.read_text(encoding="utf-8")
-                                gh.save_learned_patterns_yaml(
-                                    yml_text,
-                                    commit_message=f"learned_patterns: contract.{pick_slug}.{field} = {pick_col}",
-                                    author_email=user_email,
-                                )
-                        except Exception:
-                            pass  # GitHub commit is best-effort
-                    except Exception as e:
-                        st.error(f"Échec sauvegarde : {e}")
-            with c2:
-                if (pick_slug, field) in st.session_state.contract_unknown_resolved:
-                    if st.button("↺ Oublier ce mapping",
-                                 key=f"unk_forget_{field}",
-                                 use_container_width=True):
-                        st.session_state.contract_unknown_resolved.pop((pick_slug, field), None)
-                        st.rerun()
+                            unkcol.register_learned_column(
+                                patterns_path,
+                                table="contract",
+                                source_slug=slug,
+                                field_name=field,
+                                column=pick_col,
+                                source_df=df,
+                                learned_by=user_email,
+                            )
+                            st.session_state.contract_unknown_resolved[
+                                (slug, field)
+                            ] = pick_col
+                            st.success(
+                                f"✓ `{field}` ← `{pick_col}` mémorisé. Relance le moteur pour appliquer."
+                            )
+                            try:
+                                if gh.is_configured():
+                                    yml_text = patterns_path.read_text(encoding="utf-8")
+                                    gh.save_learned_patterns_yaml(
+                                        yml_text,
+                                        commit_message=(
+                                            f"learned_patterns: contract.{slug}.{field} = {pick_col}"
+                                        ),
+                                        author_email=user_email,
+                                    )
+                            except Exception:
+                                pass
+                        except Exception as e:
+                            st.error(f"Échec sauvegarde : {e}")
+                with c2:
+                    if (slug, field) in st.session_state.contract_unknown_resolved:
+                        if st.button(
+                            "↺",
+                            key=f"unk_forget_{slug}_{field}_{file_key}",
+                            use_container_width=True,
+                            help="Oublier ce mapping",
+                        ):
+                            st.session_state.contract_unknown_resolved.pop(
+                                (slug, field), None
+                            )
+                            st.rerun()
+                st.markdown("")  # spacer between fields
+
+    # --- 6. Unresolvable fields (no file can supply them) — single info block.
+    if unresolvable:
+        with st.expander(
+            f"ℹ️ {len(unresolvable)} champ(s) non mappable(s) depuis un fichier",
+            expanded=False,
+        ):
+            st.caption(
+                "Ces champs sont obligatoires mais ne viennent pas d'un fichier "
+                "source — ils sont calculés à partir d'autres infos (isHT depuis VP, "
+                "partnerId depuis le backoffice, etc.). Laissés vides si non dérivables."
+            )
+            for req in unresolvable:
+                field = req["field"]
+                cands = ", ".join(req.get("candidate_sources") or [])
+                affected = req.get("affected_count") or 0
+                total = req.get("total_rows") or 0
+                st.markdown(
+                    f"- **`{field}`** — {affected}/{total} contrat(s), "
+                    f"source attendue : *{cands or 'n/a'}*"
+                )
 
 
 # ========== Rules editor page ==========

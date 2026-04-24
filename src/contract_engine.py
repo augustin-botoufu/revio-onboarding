@@ -1,15 +1,25 @@
 """Contract rules engine — applies contract.yml rules to source DataFrames.
 
-Differs from rules_engine.py (Vehicle) on two axes:
+**Plate-primary indexing (Jalon 4.2.6)** : every source is keyed by plate
+alone. Rationale: Augustin's rule — "la plaque est l'input, si on trouve
+les infos on les remplit, sinon on laisse vide". The previous composite
+`(plate, number)` scheme silently dropped rows when a source's "number"
+heuristic misfired (e.g. `Réf. cli/cond.` in Ayvens AND captured as
+"number", giving keys like `PLATE|JULIE PINOCHET` that overlapped
+nothing).
 
-1. **Composite primary key (plate, number)** instead of plate alone.
-   Multiple contracts may share a plate over time (re-leased vehicle),
-   so we key on the pair. The key string is `"{plate}|{number}"` — stable
-   and easy to split downstream.
+Consequences:
+- Output = 1 row per client plate, exactly. Lessor data merges in by
+  plate match.
+- The `number` field becomes a regular populated field (via the YAML
+  rules that read explicit columns like `N° Contrat`), not a join key.
+- Orphans = plates in lessor files absent from `client_file`.
+- If a lessor has multiple rows for the same plate (e.g. historical
+  contracts), the FIRST row wins. Earlier contracts are lost — document
+  for users via a warning.
 
-2. **Facture sources produce DataFrames with (plate, number, rubrique
-   fields)** rather than one row per plate. They're indexed identically
-   once the pdf_parser has built them.
+Facture sources (pdf_parser output) are indexed the same way — one row
+per plate.
 
 Reuses the Vehicle engine's lineage, transforms, and conflict-detection
 logic. Extra contract-specific rules:
@@ -98,29 +108,31 @@ def load_rules(path: str | Path) -> dict:
         return yaml.safe_load(f)
 
 
-# ---------- Key helpers ----------
+# ---------- Key helpers (plate-primary since Jalon 4.2.6) ----------
 
 
-def _make_key(plate: Any, number: Any, plate_only: bool = False) -> Optional[str]:
-    """Build a composite key.
+def _make_key(plate: Any, number: Any = None, plate_only: bool = True) -> Optional[str]:
+    """Build a contract key.
 
-    In normal mode: ``"{plate}|{number}"`` — both required.
-    In plate-only mode: ``"{plate}|*"`` — marker `*` means "no contract
-    number in source; key by plate alone". All sources in the same run
-    MUST use the same mode, otherwise joins silently mis-align.
+    Since Jalon 4.2.6 we always key by plate alone. ``number`` and
+    ``plate_only`` arguments are kept for backwards compatibility with
+    any external caller but are ignored — the returned key is always
+    just the normalized plate.
     """
     p = plate_for_matching(plate) if plate is not None else None
     if not p:
         return None
-    if plate_only:
-        return f"{p}|*"
-    n = str(number).strip() if number is not None and str(number).strip() else None
-    if not n:
-        return None
-    return f"{p}|{n}"
+    return p
 
 
 def split_key(key: str) -> tuple[str, str]:
+    """Return (plate, number) — number is always "" post-4.2.6 (plate-only).
+
+    Kept for callers that still pattern-match on composite keys (e.g.
+    UI previews). The second slot will always be empty string now.
+    """
+    if not isinstance(key, str):
+        return (str(key) if key is not None else "", "")
     plate, _, number = key.partition("|")
     return plate, number
 
@@ -137,74 +149,52 @@ def _find_column(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
 
 _PLATE_CANDS = ["plaque", "immat", "n° immat", "no immat", "plate"]
 
-# Strong, unambiguous markers for "numéro de contrat" — no false positives.
-_NUMBER_STRONG = [
-    "numéro contrat", "numero contrat", "numéro de contrat", "numero de contrat",
-    "n° contrat", "no contrat", "n°contrat", "n° de contrat",
-    "n°contr", "nocontr", "contract number", "contract_number",
-    "réf contrat", "ref contrat", "référence contrat", "reference contrat",
-]
-# Loose markers — accepted ONLY if the column doesn't also mention a reject
-# token (km, durée, date, loyer, avantage en nature…). The bare word "contrat"
-# used to catch "Km contrat" in the client file; hence the reject guard.
-_NUMBER_LOOSE = ["contrat", "number", "réf", "ref"]
-_NUMBER_REJECT = [
-    "km", "kilom", "kilomét", "kilomet",
-    "durée", "duree", "date", "début", "debut", "fin", "echéance", "echeance",
-    "loyer", "aen", "avantage",
-    "marque", "modèle", "modele", "couleur", "immatric",
-]
 
+def _find_plate_column(df: pd.DataFrame) -> Optional[str]:
+    """Find the plate column. Accepts, in order of preference:
 
-def _find_number_column(df: pd.DataFrame) -> Optional[str]:
-    """Detect the contract-number column, rejecting false positives.
-
-    Uses two passes:
-      1. Strong markers (e.g. "N° Contrat", "Numéro de contrat") win outright.
-      2. Loose markers (e.g. "contrat", "ref") match only if the column
-         header does NOT contain a reject token like "km", "durée", "date"…
+    1. ``__map__plate`` or ``__map__registrationPlate`` — canonical columns
+       emitted by ``pipeline.merge_engine_sources`` when the user has
+       already mapped the plate column in the **Vehicle** tab. Jalon 4.2.6
+       honors that mapping so Augustin doesn't have to map the same thing
+       twice (complaint #2: "tu me demandes de matcher des champs que j'ai
+       déjà matché dans la base véhicule").
+    2. Literal ``plate`` column.
+    3. French heuristic : "Plaque", "Immat", etc.
     """
-    for col in df.columns:
-        low = str(col).strip().lower()
-        for c in _NUMBER_STRONG:
-            if c in low:
-                return col
-    for col in df.columns:
-        low = str(col).strip().lower()
-        if any(rt in low for rt in _NUMBER_REJECT):
-            continue
-        for c in _NUMBER_LOOSE:
-            if c in low:
-                return col
-    return None
+    for canonical in ("__map__plate", "__map__registrationPlate"):
+        if canonical in df.columns:
+            return canonical
+    if "plate" in df.columns:
+        return "plate"
+    return _find_column(df, _PLATE_CANDS)
 
 
-def _index_by_composite(df: pd.DataFrame, plate_only: bool = False) -> pd.DataFrame:
-    """Index a source df by composite key.
+def _index_by_plate(df: pd.DataFrame) -> pd.DataFrame:
+    """Index a source DataFrame by normalized plate.
 
-    With ``plate_only=True``, key by plate alone (first row per plate wins).
-    Used when the client file has no contract-number column — all other
-    sources must then switch to plate-only too so joins align.
+    Replaces the Jalon ≤4.2.5 composite-key indexing. Rationale in the
+    module docstring. First row per plate wins — if a source has
+    multiple historical rows for the same plate, downstream rules see
+    only the first.
     """
     if df is None or df.empty:
         return df
     out = df.copy()
     out["__src_row__"] = range(len(out))
-    plate_col = "plate" if "plate" in out.columns else _find_column(out, _PLATE_CANDS)
-    if plate_only:
-        if plate_col is None:
-            return out
-        keys = [_make_key(p, None, plate_only=True) for p in out[plate_col]]
-    else:
-        number_col = "number" if "number" in out.columns else _find_number_column(out)
-        if plate_col is None or number_col is None:
-            return out  # caller will skip this source silently
-        keys = [_make_key(p, n) for p, n in zip(out[plate_col], out[number_col])]
+    plate_col = _find_plate_column(out)
+    if plate_col is None:
+        return out  # caller will skip this source silently
+    keys = [_make_key(p) for p in out[plate_col]]
     out["__key__"] = keys
     out = out.dropna(subset=["__key__"])
     out = out.drop_duplicates(subset=["__key__"], keep="first")
     out = out.set_index("__key__", drop=True)
     return out
+
+
+# Backwards-compat alias (some callers may still reference the old name).
+_index_by_composite = _index_by_plate
 
 
 # ---------- Rule application ----------
@@ -581,34 +571,35 @@ def apply_rules(
     issues: list[Issue] = []
     lineage = LineageStore()
 
-    # Detect plate-only mode: if the client file has no detectable contract
-    # number column, ALL sources must be indexed by plate alone, otherwise
-    # joins silently mis-align (client keyed by "PLATE|170000" from a "Km
-    # contrat" false-positive while EP is keyed by "PLATE|W90322"). In that
-    # case, we key every source by plate alone (first row per plate wins).
-    plate_only_mode = False
-    client_file_raw = source_dfs.get("client_file")
-    if client_file_raw is not None and not client_file_raw.empty:
-        has_number_col = (
-            "number" in client_file_raw.columns
-            or _find_number_column(client_file_raw) is not None
-        )
-        if not has_number_col:
-            plate_only_mode = True
+    # Plate-primary indexing (Jalon 4.2.6): every source keyed by plate
+    # alone. ``number`` is resolved as a regular field via the YAML rules
+    # (each source declares its N° Contrat column explicitly) — never
+    # used as a join key. Output = 1 row per client plate.
+    indexed: dict[str, pd.DataFrame] = {
+        slug: _index_by_plate(df) for slug, df in source_dfs.items()
+    }
+
+    # Warn users when a lessor file has multiple rows per plate (historical
+    # contracts) so they know only the first row was retained.
+    for slug, df_raw in source_dfs.items():
+        if df_raw is None or df_raw.empty:
+            continue
+        plate_col = _find_plate_column(df_raw)
+        if plate_col is None:
+            continue
+        normalized = [plate_for_matching(p) for p in df_raw[plate_col]]
+        normalized = [p for p in normalized if p]
+        if len(normalized) != len(set(normalized)):
+            from collections import Counter
+            dupes = [p for p, c in Counter(normalized).items() if c > 1]
             issues.append(Issue(
-                plate=None, number=None, field="number", source="__engine__",
+                plate=None, number=None, field="plate", source=slug,
                 warning=(
-                    "Aucun numéro de contrat détecté dans le fichier client — "
-                    "indexation par plaque seule sur tous les fichiers. "
-                    "Si plusieurs contrats partagent la même plaque, seul le "
-                    "premier est retenu par source."
+                    f"{len(dupes)} plaque(s) avec plusieurs lignes dans {slug} — "
+                    f"seule la 1re ligne par plaque est retenue "
+                    f"(ex : {', '.join(dupes[:3])})."
                 ),
             ))
-
-    indexed: dict[str, pd.DataFrame] = {
-        slug: _index_by_composite(df, plate_only=plate_only_mode)
-        for slug, df in source_dfs.items()
-    }
 
     client_df = indexed.get("client_file")
     has_client = client_df is not None and not client_df.empty
@@ -672,65 +663,52 @@ def apply_rules(
             if conflicts:
                 conflicts_by_cell[(key, field_name)] = conflicts
 
-    # Backfill `plate` and `number` fields from the composite key when no
-    # rule successfully populated them. Rationale: the client-file YAML rule
-    # for `plate` declares `column: 'Plaque / Immatriculation'` but real
-    # client files often use "Immat" / "Immatriculation" / etc. — the
-    # heuristic column-detector already found it to build the key; we can
-    # surface that same plate on the output row. Same for `number` (except
-    # in plate-only mode where number is the sentinel `*`, which we skip).
+    # Backfill `plate` from the key (which IS the plate post-4.2.6).
+    # If the YAML rule for `plate` targets a column name that doesn't exist
+    # in the client file (e.g. rule wants "Plaque / Immatriculation" but
+    # file has "Immat"), the rule won't fire — but the plate-detection
+    # heuristic already found the column to build the index, so we just
+    # copy the key into the cell.
     if "plate" in out_df.columns:
         for key in all_keys:
             if not _is_null(out_df.at[key, "plate"]):
                 continue
-            p, _ = split_key(key)
-            if p:
-                out_df.at[key, "plate"] = p
+            if key:
+                out_df.at[key, "plate"] = key
                 source_by_cell[(key, "plate")] = "derived"
                 lineage.record(LineageRecord(
                     table="contract", key=key, field="plate",
-                    value=p, source_used="derived",
-                    source_col="(clé composite)", source_row=None, priority=99,
-                    transform="from_composite_key",
+                    value=key, source_used="derived",
+                    source_col="(clé d'indexation)", source_row=None, priority=99,
+                    transform="from_plate_key",
                     rule_id=build_rule_id("contract", "plate", "derived", 99),
                     conflicts_ignored=[],
-                    notes="Plaque reconstruite depuis la clé composite (aucune règle YAML ne l'a remplie).",
+                    notes="Plaque reprise de la clé d'indexation (aucune règle YAML ne l'a remplie).",
                 ))
-    if "number" in out_df.columns and not plate_only_mode:
-        for key in all_keys:
-            if not _is_null(out_df.at[key, "number"]):
-                continue
-            _, n = split_key(key)
-            if n and n != "*":
-                out_df.at[key, "number"] = n
-                source_by_cell[(key, "number")] = "derived"
-                lineage.record(LineageRecord(
-                    table="contract", key=key, field="number",
-                    value=n, source_used="derived",
-                    source_col="(clé composite)", source_row=None, priority=99,
-                    transform="from_composite_key",
-                    rule_id=build_rule_id("contract", "number", "derived", 99),
-                    conflicts_ignored=[],
-                    notes="Numéro reconstruit depuis la clé composite.",
-                ))
+    # `number` is no longer derived from the key — it's a normal field
+    # populated by YAML rules reading explicit columns. Left blank if no
+    # lessor source provides it (Augustin's rule: pas d'info → vide).
 
     # Cross-check: plates in lessor files but absent from client_file → anomaly
     for slug, df in indexed.items():
         if slug in ("client_file", "api_plaque") or df is None or df.empty:
             continue
         for k in df.index:
-            # Only cross-check sources that were composite-indexed (key like "PLATE|NUMBER").
-            # EP files without a contract number column remain integer-indexed and are skipped.
-            if not isinstance(k, str) or "|" not in k:
+            if not isinstance(k, str) or not k:
                 continue
-            plate, number = split_key(k)
-            if number == "*":
-                number = None
             if has_client and k not in client_df.index:
-                # logged as anomaly (will go into contract_errors.xlsx)
+                # Look up the contract number from the lessor row (if any)
+                # to enrich the anomaly line.
+                num_val: Optional[str] = None
+                for col in ("number", "N° Contrat", "Contrat", "Numéro contrat"):
+                    if col in df.columns:
+                        v = df.at[k, col]
+                        if not _is_null(v):
+                            num_val = str(v).strip()
+                            break
                 issues.append(Issue(
-                    plate=plate, number=number, field="plate", source=slug,
-                    warning=f"Plaque/contrat présent dans {slug} mais absent du fichier client (cross-check plate exclusive)."
+                    plate=k, number=num_val, field="plate", source=slug,
+                    warning=f"Plaque présente dans {slug} mais absente du fichier client."
                 ))
 
     # Post-passes
@@ -755,19 +733,11 @@ def apply_rules(
                 )
                 if val is not None:
                     orphan_df.at[key, field_name] = val
-        # Same backfill as main df: plate + number from composite key.
+        # Backfill plate from the key (which IS the plate post-4.2.6).
         if "plate" in orphan_df.columns:
             for key in orphan_keys:
-                if _is_null(orphan_df.at[key, "plate"]):
-                    p, _ = split_key(key)
-                    if p:
-                        orphan_df.at[key, "plate"] = p
-        if "number" in orphan_df.columns and not plate_only_mode:
-            for key in orphan_keys:
-                if _is_null(orphan_df.at[key, "number"]):
-                    _, n = split_key(key)
-                    if n and n != "*":
-                        orphan_df.at[key, "number"] = n
+                if _is_null(orphan_df.at[key, "plate"]) and key:
+                    orphan_df.at[key, "plate"] = key
         orphan_df.index.name = "contract_key"
 
     # Unknown column requests: one entry per mandatory field left unresolved
@@ -789,15 +759,9 @@ def apply_rules(
             r.get("source") for r in spec["rules"]
             if r.get("source") and r.get("source") not in {"rule_engine", "derived"}
         ]
-        # Sample a few keys for the UI preview ("ex : AB-123-CD / 12345").
-        # In plate-only mode, the "number" slot is the sentinel '*' — blank it
-        # so the UI displays just the plate instead of "AB-123-CD / *".
-        sample_pairs: list[tuple[str, str]] = []
-        for k in affected_keys[:3]:
-            p, n = split_key(k)
-            if n == "*":
-                n = ""
-            sample_pairs.append((p, n))
+        # Sample a few keys for the UI preview. Post-4.2.6 the key IS the
+        # plate, so the "number" slot is always empty.
+        sample_pairs: list[tuple[str, str]] = [(k, "") for k in affected_keys[:3]]
         unknown_requests.append({
             "field": field_name,
             "candidate_sources": candidate_sources,
