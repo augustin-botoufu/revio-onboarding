@@ -3430,7 +3430,17 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
         if mapped_count:
             header += f" · **{mapped_count} mappé(s)**"
 
-        with st.expander(header, expanded=True):
+        # Jalon 4.3.2 — Collapse the expander when there's nothing left to do.
+        # If every mappable field is already bound (typically via
+        # learned_columns.yml re-hydration at upload, post-Jalon 4.3.0), the
+        # dropdowns + IA + Memorize buttons are pure noise. Keep it open only
+        # when at least one field still needs user attention. Users can still
+        # click to expand for audit/modification.
+        _all_mapped = (
+            len(offerable_fields) > 0
+            and mapped_count >= len(offerable_fields)
+        )
+        with st.expander(header, expanded=not _all_mapped):
             # --- Action row: IA + Memorize -----------------------------------
             c1, c2 = st.columns([1, 1])
             with c1:
