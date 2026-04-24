@@ -117,6 +117,71 @@ def register_learned_column(
     save_learned_patterns(patterns_path, data)
 
 
+def unregister_learned_column(
+    patterns_path: str | Path,
+    *,
+    table: str,
+    source_slug: str,
+    field_name: str,
+) -> bool:
+    """Remove a single (table, slug, field) entry from learned_patterns.yml.
+
+    Used by the Jalon 4.3.1 mapping-audit UI when the user clicks 🗑️ on
+    a single row: the field should revert to auto-detection at the next
+    upload rather than keeping the memorized (incorrect) mapping.
+
+    Returns True if an entry was removed, False if nothing matched
+    (already absent). Empty source/table nodes are cleaned up so the
+    YAML doesn't accumulate dead keys.
+    """
+    data = load_learned_patterns(patterns_path)
+    table_node = data.get("patterns", {}).get(table)
+    if not isinstance(table_node, dict):
+        return False
+    source_node = table_node.get(source_slug)
+    if not isinstance(source_node, dict):
+        return False
+    if field_name not in source_node:
+        return False
+    source_node.pop(field_name, None)
+    # Clean up empty nodes so subsequent scans don't see ghost slugs.
+    if not source_node:
+        table_node.pop(source_slug, None)
+    if not table_node:
+        data["patterns"].pop(table, None)
+    save_learned_patterns(patterns_path, data)
+    return True
+
+
+def unregister_learned_slug(
+    patterns_path: str | Path,
+    *,
+    source_slug: str,
+    tables: tuple[str, ...] = ("vehicle", "contract"),
+) -> int:
+    """Remove ALL memorized column mappings for a given slug, across tables.
+
+    Used by the "🗑️ Supprimer tous les mappings mémorisés" button on the
+    Types-détectés section (4.3.1). Returns the number of entries
+    removed so the UI can feedback 'N mappings effacés'.
+    """
+    data = load_learned_patterns(patterns_path)
+    total = 0
+    patterns_node = data.get("patterns", {})
+    for table in tables:
+        table_node = patterns_node.get(table)
+        if not isinstance(table_node, dict):
+            continue
+        source_node = table_node.pop(source_slug, None)
+        if isinstance(source_node, dict):
+            total += len(source_node)
+        if not table_node:
+            patterns_node.pop(table, None)
+    if total:
+        save_learned_patterns(patterns_path, data)
+    return total
+
+
 def learned_patterns_to_overrides(
     patterns_path: str | Path,
     table: str,

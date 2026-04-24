@@ -534,11 +534,13 @@ _init_state()
 #   - Contexte: client name + API key status (only on onboarding modes)
 #   - Instructions spéciales: collapsed expander (only on onboarding modes)
 NAV_ITEMS = [
-    ("home",    "🏠",  "Accueil"),
-    ("classic", "📥",  "Import — Flow classique"),
-    ("engine",  "🧪",  "Import — Moteur de règles"),
-    ("rules",   "⚙️",  "Règles d'import"),
-    ("normal",  "🧭",  "Normalisation"),
+    ("home",     "🏠",   "Accueil"),
+    ("classic",  "📥",   "Import — Flow classique"),
+    ("engine",   "🧪",   "Import — Moteur de règles"),
+    ("rules",    "⚙️",   "Règles d'import"),
+    ("normal",   "🧭",   "Normalisation"),
+    # Jalon 4.3.1 — audit/édition globale des mappings mémorisés
+    ("mappings", "🗂️",   "Mappings mémorisés"),
 ]
 
 with st.sidebar:
@@ -2070,6 +2072,9 @@ def _render_vehicle_tab_body(engine_files: dict) -> None:
     # --- Column mapping for slugs whose columns aren't baked in YAML ---
     _render_manual_mapping_section(engine_files)
 
+    # Jalon 4.3.1 — Audit des correspondances (bouton contextuel)
+    _render_audit_button_section(engine_files, tab_hint="vehicle")
+
     # --- Run ---
     st.markdown("#### Lancer le moteur Véhicules")
 
@@ -2599,6 +2604,9 @@ def _render_contract_tab_body(engine_files: dict) -> None:
         )
         _render_contract_unknown_columns_ui(probe_unknowns, engine_files)
 
+    # Jalon 4.3.1 — Audit des correspondances (bouton contextuel)
+    _render_audit_button_section(engine_files, tab_hint="contract")
+
     # --- Run ---
     st.markdown("#### Lancer le moteur Contrats")
 
@@ -2726,6 +2734,578 @@ def _contract_fields_by_slug() -> dict[str, list[str]]:
             out.setdefault(src, []).append(field_name)
     # Dedup while preserving first-seen order.
     return {s: list(dict.fromkeys(fs)) for s, fs in out.items()}
+
+
+# ========== Jalon 4.3.1 — Mapping audit =====================================
+# Écran d'audit des mappings. Un seul rendu partagé entre 2 chemins d'accès :
+#   · bouton "Vérifier les correspondances" dans les onglets Vehicles/Contracts
+#   · chapitre "Mappings mémorisés" dans le menu gauche (sans fichier chargé)
+#
+# L'état "source de vérité" pendant la session :
+#   · st.session_state.engine_overrides  — mapping effectif pour CE run
+#   · learned_columns.yml                — ce qui sera re-joué au prochain upload
+#
+# Le bouton 💾 Mémoriser synchronise le YAML avec l'état effectif courant.
+# Le 🗑️ par ligne efface le mapping dans les deux.
+# ============================================================================
+
+_LEARNED_COLUMNS_PATH = (
+    Path(__file__).parent / "src" / "rules" / "learned_columns.yml"
+)
+
+
+def _all_audit_target_fields() -> list[tuple[str, str, str]]:
+    """Liste plate des cibles proposées dans l'audit : (table, field, label).
+
+    Vehicle = MANUAL_MAPPABLE_FIELDS (12 champs) — couvre les slugs à mapping
+    manuel (client_file / autre_loueur_etat_parc). Les slugs dont les colonnes
+    sont hard-codées dans vehicle.yml ne pilotent pas cette UI.
+    Contract = union de tous les champs référencés par un source slug dans
+    contract.yml (via _contract_fields_by_slug).
+    """
+    out: list[tuple[str, str, str]] = []
+    for f in MANUAL_MAPPABLE_FIELDS:
+        out.append(("vehicle", f, f"vehicle.{f}"))
+    contract_fields: list[str] = []
+    for slug_fields in _contract_fields_by_slug().values():
+        for f in slug_fields:
+            if f not in contract_fields:
+                contract_fields.append(f)
+    for f in contract_fields:
+        out.append(("contract", f, f"contract.{f}"))
+    return out
+
+
+def _load_memorized_for_slug(slug: str) -> dict[str, dict[str, str]]:
+    """Charge {table: {field: column}} pour un slug depuis learned_columns.yml.
+    Les deux tables (vehicle/contract) sont lues séparément pour qu'on puisse
+    distinguer la provenance lors du rendu du badge d'état.
+    """
+    out: dict[str, dict[str, str]] = {"vehicle": {}, "contract": {}}
+    try:
+        data = unkcol.load_learned_patterns(_LEARNED_COLUMNS_PATH)
+    except Exception:
+        return out
+    patterns_node = data.get("patterns", {}) or {}
+    for table in ("vehicle", "contract"):
+        table_node = patterns_node.get(table, {}) or {}
+        slug_node = table_node.get(slug, {}) or {}
+        for field_name, entry in slug_node.items():
+            col = entry.get("column") if isinstance(entry, dict) else None
+            if col:
+                out[table][field_name] = col
+    return out
+
+
+def _build_audit_rows(file_key: str, file_info: dict) -> list[dict]:
+    """Construit une ligne par colonne source du fichier.
+
+    Chaque ligne :
+      - source_col : str (nom de la colonne telle qu'elle apparaît dans le df)
+      - bindings   : list[(table, field)] — cibles actuellement mappées à cette
+        colonne via engine_overrides OU memorized (mais pas encore actif).
+      - state      : "memorized" | "session" | "none"
+
+    Les colonnes de `__source_file`, `__source_sheet` ajoutées par
+    merge_engine_sources sont filtrées car elles ne sont pas des candidates
+    utiles pour un mapping utilisateur.
+    """
+    df = file_info.get("df")
+    slug = file_info.get("slug") or ""
+    if df is None or df.empty:
+        return []
+
+    # Current session bindings keyed by source column.
+    session_by_col: dict[str, list[tuple[str, str]]] = {}
+    current_overrides = st.session_state.get("engine_overrides", {}) or {}
+    for (fk, field), src_col in current_overrides.items():
+        if fk != file_key or not src_col:
+            continue
+        # On n'a pas de table (vehicle/contract) dans la clé engine_overrides ;
+        # on recupère l'info en croisant avec _all_audit_target_fields (le même
+        # field peut exister dans vehicle ET contract → on ajoute les 2 liens).
+        for tbl, f, _ in _all_audit_target_fields():
+            if f == field:
+                session_by_col.setdefault(str(src_col), []).append((tbl, f))
+
+    memorized = _load_memorized_for_slug(slug)
+    memorized_by_col: dict[str, list[tuple[str, str]]] = {}
+    for tbl, fld_map in memorized.items():
+        for field, src_col in fld_map.items():
+            memorized_by_col.setdefault(str(src_col), []).append((tbl, field))
+
+    rows: list[dict] = []
+    # Iterate dataframe columns in their natural order, skipping hidden ones.
+    for col in df.columns:
+        col_s = str(col)
+        if col_s.startswith("__source_"):
+            continue
+        session_bindings = session_by_col.get(col_s, [])
+        memorized_bindings = memorized_by_col.get(col_s, [])
+        # Deduplicate: merged view of all bindings for display.
+        merged_bindings: list[tuple[str, str]] = []
+        for b in session_bindings + memorized_bindings:
+            if b not in merged_bindings:
+                merged_bindings.append(b)
+        if any(b in memorized_bindings for b in merged_bindings):
+            state = "memorized"
+        elif merged_bindings:
+            state = "session"
+        else:
+            state = "none"
+        rows.append({
+            "source_col": col_s,
+            "bindings": merged_bindings,
+            "memorized": list(memorized_bindings),
+            "state": state,
+        })
+    return rows
+
+
+def _state_badge(state: str) -> str:
+    """Petit HTML badge pour la colonne État du tableau d'audit."""
+    if state == "memorized":
+        return (
+            "<span style='background:#DCFCE7;color:#166534;"
+            "padding:0.1rem 0.55rem;border-radius:999px;font-size:0.72rem;"
+            "font-weight:500;border:1px solid #BBF7D0'>🧠 mémorisé</span>"
+        )
+    if state == "session":
+        return (
+            "<span style='background:#DBEAFE;color:#1E40AF;"
+            "padding:0.1rem 0.55rem;border-radius:999px;font-size:0.72rem;"
+            "font-weight:500;border:1px solid #BFDBFE'>✎ session</span>"
+        )
+    return (
+        "<span style='background:#F3F4F6;color:#6B7280;"
+        "padding:0.1rem 0.55rem;border-radius:999px;font-size:0.72rem;"
+        "font-weight:500;border:1px solid #E5E7EB'>—</span>"
+    )
+
+
+def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
+    """Écran d'audit pour un fichier uploadé : édition + mémorisation + 🗑️.
+
+    Appelé depuis les onglets Vehicles/Contracts via le bouton
+    "Vérifier les correspondances".
+    """
+    file_info = engine_files.get(file_key)
+    if not file_info:
+        st.info("Fichier introuvable — re-upload peut-être nécessaire.")
+        return
+    df = file_info.get("df")
+    slug = file_info.get("slug") or ""
+    filename = file_info.get("filename") or file_key
+    sheet = file_info.get("sheet_name")
+    if df is None or df.empty:
+        st.info("Ce fichier est vide — rien à mapper.")
+        return
+
+    all_targets = _all_audit_target_fields()  # [(table, field, label)]
+    target_labels = [lbl for (_, _, lbl) in all_targets]
+    label_to_tblfield = {lbl: (tbl, f) for (tbl, f, lbl) in all_targets}
+
+    rows = _build_audit_rows(file_key, file_info)
+    if not rows:
+        st.info("Aucune colonne détectée dans ce fichier.")
+        return
+
+    # Toolbar
+    n_mapped = sum(1 for r in rows if r["bindings"])
+    n_memorized = sum(1 for r in rows if r["memorized"])
+    st.caption(
+        f"📄 **{filename}**"
+        + (f" [{sheet}]" if sheet else "")
+        + f" · slug `{slug}` · {len(rows)} colonne(s) dans le fichier · "
+        f"{n_mapped} mappé(s) · {n_memorized} mémorisé(s)"
+    )
+
+    # --- Header row -----------------------------------------------------
+    hc = st.columns([3, 5, 1.2, 0.8])
+    hc[0].markdown("**Colonne fichier**")
+    hc[1].markdown("**Mappé vers**")
+    hc[2].markdown("**État**")
+    hc[3].markdown("**Action**")
+    st.markdown("<hr style='margin:0.4rem 0'>", unsafe_allow_html=True)
+
+    # Track if anything needs saving
+    user_email = st.session_state.get("current_user") or _current_user_email()
+
+    for i, row in enumerate(rows):
+        src = row["source_col"]
+        current_labels = [
+            f"{t}.{f}" for (t, f) in row["bindings"]
+            if f"{t}.{f}" in target_labels
+        ]
+        widget_key = f"audit_ms_{file_key}_{i}_{src}"
+        c = st.columns([3, 5, 1.2, 0.8])
+        with c[0]:
+            # Show column name + sample values if available (compact)
+            st.markdown(f"**`{src}`**")
+            try:
+                sample = (
+                    df[src].dropna().astype(str).head(2).tolist()
+                    if src in df.columns else []
+                )
+                if sample:
+                    snippet = " · ".join(s[:22] for s in sample)
+                    st.caption(f"ex: {snippet}")
+            except Exception:
+                pass
+        with c[1]:
+            picked = st.multiselect(
+                label=f"bindings_{src}",
+                options=target_labels,
+                default=current_labels,
+                key=widget_key,
+                label_visibility="collapsed",
+                placeholder="Aucune cible — tape pour chercher un champ",
+            )
+            # Reactively apply multi-select diff to engine_overrides.
+            picked_set = set(picked)
+            current_set = set(current_labels)
+            added = picked_set - current_set
+            removed = current_set - picked_set
+            if added or removed:
+                for lbl in added:
+                    _tbl, field = label_to_tblfield[lbl]
+                    st.session_state.engine_overrides[(file_key, field)] = src
+                for lbl in removed:
+                    _tbl, field = label_to_tblfield[lbl]
+                    # Only pop if the removed binding was pointing at THIS src
+                    if st.session_state.engine_overrides.get((file_key, field)) == src:
+                        st.session_state.engine_overrides.pop(
+                            (file_key, field), None
+                        )
+                # invalidate results so user re-runs the engine
+                st.session_state.engine_result = None
+                st.session_state.contract_result = None
+                st.rerun()
+        with c[2]:
+            st.markdown(_state_badge(row["state"]), unsafe_allow_html=True)
+        with c[3]:
+            btn_key = f"audit_del_{file_key}_{i}_{src}"
+            if row["bindings"] or row["memorized"]:
+                if st.button(
+                    "🗑️",
+                    key=btn_key,
+                    help=(
+                        "Supprimer toutes les cibles pour cette colonne. "
+                        "Efface aussi la mémorisation (retour auto-détection "
+                        "au prochain upload)."
+                    ),
+                ):
+                    # Remove from engine_overrides
+                    for tbl, field in row["bindings"]:
+                        if (st.session_state.engine_overrides.get(
+                                (file_key, field)) == src):
+                            st.session_state.engine_overrides.pop(
+                                (file_key, field), None
+                            )
+                    # Remove from memorized
+                    for tbl, field in row["memorized"]:
+                        try:
+                            unkcol.unregister_learned_column(
+                                _LEARNED_COLUMNS_PATH,
+                                table=tbl,
+                                source_slug=slug,
+                                field_name=field,
+                            )
+                        except Exception:
+                            pass
+                    # Persist YAML change to GitHub if configured
+                    if row["memorized"]:
+                        try:
+                            if gh.is_configured():
+                                yml_text = _LEARNED_COLUMNS_PATH.read_text(
+                                    encoding="utf-8"
+                                )
+                                gh.save_learned_columns_yaml(
+                                    yml_text,
+                                    commit_message=(
+                                        f"learned_columns: remove "
+                                        f"{slug}.{src} via audit"
+                                    ),
+                                    author_email=user_email,
+                                )
+                        except Exception:
+                            pass
+                    st.session_state.engine_result = None
+                    st.session_state.contract_result = None
+                    st.rerun()
+
+    # --- Bottom toolbar --------------------------------------------------
+    st.markdown("---")
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        # Memorize ALL current session bindings (and drop any yaml entry for
+        # a (field, src) no longer present in session).
+        if st.button(
+            "💾 Mémoriser toutes les modifications",
+            key=f"audit_save_all_{file_key}",
+            type="primary",
+            use_container_width=True,
+            help=(
+                "Enregistre dans learned_columns.yml tous les mappings "
+                "actuellement définis pour ce fichier."
+            ),
+        ):
+            # Index current session bindings for this file, per table.
+            session_bindings: list[tuple[str, str, str]] = []  # (table, field, src)
+            for (fk, field), src_col in (
+                st.session_state.get("engine_overrides", {}) or {}
+            ).items():
+                if fk != file_key or not src_col:
+                    continue
+                for tbl, f, _ in all_targets:
+                    if f == field:
+                        session_bindings.append((tbl, f, src_col))
+            saved = 0
+            errors: list[str] = []
+            for tbl, field, src_col in session_bindings:
+                try:
+                    unkcol.register_learned_column(
+                        _LEARNED_COLUMNS_PATH,
+                        table=tbl,
+                        source_slug=slug,
+                        field_name=field,
+                        column=src_col,
+                        source_df=df,
+                        learned_by=user_email,
+                    )
+                    saved += 1
+                except Exception as e:
+                    errors.append(f"{tbl}.{field}: {e}")
+            # GitHub commit
+            try:
+                if gh.is_configured():
+                    yml_text = _LEARNED_COLUMNS_PATH.read_text(encoding="utf-8")
+                    gh.save_learned_columns_yaml(
+                        yml_text,
+                        commit_message=(
+                            f"learned_columns: audit save "
+                            f"{slug} ({saved} champs)"
+                        ),
+                        author_email=user_email,
+                    )
+            except Exception:
+                pass
+            if errors:
+                st.error(
+                    f"{saved} champ(s) mémorisé(s), "
+                    f"{len(errors)} échec(s): " + "; ".join(errors[:3])
+                )
+            else:
+                st.success(f"✓ {saved} champ(s) mémorisé(s) pour `{slug}`.")
+    with c2:
+        if st.button(
+            "🗑️ Effacer toute la mémoire de ce slug",
+            key=f"audit_wipe_{file_key}",
+            use_container_width=True,
+            help=(
+                "Supprime tous les mappings mémorisés pour ce type de "
+                "fichier (les mappings de la session actuelle sont "
+                "conservés jusqu'à rerun)."
+            ),
+        ):
+            try:
+                removed = unkcol.unregister_learned_slug(
+                    _LEARNED_COLUMNS_PATH, source_slug=slug,
+                )
+                if gh.is_configured():
+                    yml_text = _LEARNED_COLUMNS_PATH.read_text(encoding="utf-8")
+                    gh.save_learned_columns_yaml(
+                        yml_text,
+                        commit_message=(
+                            f"learned_columns: wipe slug {slug} "
+                            f"({removed} entries)"
+                        ),
+                        author_email=user_email,
+                    )
+                st.success(
+                    f"✓ {removed} mapping(s) mémorisé(s) effacé(s) pour `{slug}`."
+                )
+                st.rerun()
+            except Exception as e:
+                st.error(f"Échec: {e}")
+
+
+def _render_audit_table_sidebar(slug: str) -> None:
+    """Écran d'audit pour un slug sélectionné depuis le menu gauche, sans
+    fichier uploadé : vue LECTURE des mappings mémorisés + 🗑️ par ligne.
+
+    On ne peut pas proposer d'édition ici (pas de df → pas de liste de
+    colonnes source). Pour modifier, Augustin ouvre l'onglet d'import,
+    uploade le fichier, et clique "Vérifier les correspondances".
+    """
+    memorized = _load_memorized_for_slug(slug)
+    total = sum(len(v) for v in memorized.values())
+    if total == 0:
+        st.info(
+            f"Aucun mapping mémorisé pour `{slug}`. "
+            "Utilise l'onglet d'import pour en enregistrer."
+        )
+        return
+
+    # Group memorized bindings by source column to get the 1-row-per-column view
+    by_src: dict[str, list[tuple[str, str]]] = {}
+    for tbl, fld_map in memorized.items():
+        for field, src_col in fld_map.items():
+            by_src.setdefault(str(src_col), []).append((tbl, field))
+
+    user_email = st.session_state.get("current_user") or _current_user_email()
+
+    st.caption(
+        f"`{slug}` — {total} mapping(s) mémorisé(s) sur "
+        f"{len(by_src)} colonne(s) source. "
+        "Pour modifier un mapping, ouvre le fichier dans "
+        "**Import — Moteur de règles**, puis clique "
+        "**Vérifier les correspondances**."
+    )
+    hc = st.columns([3, 5, 1.2, 0.8])
+    hc[0].markdown("**Colonne fichier**")
+    hc[1].markdown("**Mappé vers**")
+    hc[2].markdown("**État**")
+    hc[3].markdown("**Action**")
+    st.markdown("<hr style='margin:0.4rem 0'>", unsafe_allow_html=True)
+
+    for i, (src_col, bindings) in enumerate(sorted(by_src.items())):
+        c = st.columns([3, 5, 1.2, 0.8])
+        c[0].markdown(f"**`{src_col}`**")
+        c[1].markdown(
+            " · ".join(
+                f"<span style='background:#EFF6FF;color:#1E40AF;"
+                f"padding:0.08rem 0.45rem;border-radius:999px;"
+                f"font-size:0.72rem;font-weight:500;border:1px solid "
+                f"#BFDBFE'>{t}.{f}</span>"
+                for (t, f) in bindings
+            ),
+            unsafe_allow_html=True,
+        )
+        c[2].markdown(_state_badge("memorized"), unsafe_allow_html=True)
+        with c[3]:
+            if st.button(
+                "🗑️", key=f"audit_sb_del_{slug}_{i}",
+                help="Oublier ce mapping mémorisé.",
+            ):
+                for tbl, field in bindings:
+                    try:
+                        unkcol.unregister_learned_column(
+                            _LEARNED_COLUMNS_PATH,
+                            table=tbl, source_slug=slug, field_name=field,
+                        )
+                    except Exception:
+                        pass
+                try:
+                    if gh.is_configured():
+                        yml_text = _LEARNED_COLUMNS_PATH.read_text(
+                            encoding="utf-8"
+                        )
+                        gh.save_learned_columns_yaml(
+                            yml_text,
+                            commit_message=(
+                                f"learned_columns: remove {slug}.{src_col} "
+                                "via sidebar audit"
+                            ),
+                            author_email=user_email,
+                        )
+                except Exception:
+                    pass
+                st.rerun()
+
+
+def _list_memorized_slugs() -> list[str]:
+    """Slugs présents dans learned_columns.yml (toutes tables confondues)."""
+    try:
+        data = unkcol.load_learned_patterns(_LEARNED_COLUMNS_PATH)
+    except Exception:
+        return []
+    out: set[str] = set()
+    patterns_node = data.get("patterns", {}) or {}
+    for table in ("vehicle", "contract"):
+        for slug_key in (patterns_node.get(table, {}) or {}).keys():
+            out.add(slug_key)
+    return sorted(out)
+
+
+def _render_audit_button_section(engine_files: dict, tab_hint: str) -> None:
+    """Bouton 'Vérifier les correspondances' dans les onglets Véhicules/Contrats.
+
+    Déplie un sélecteur de fichier + le tableau d'audit édition.
+    `tab_hint` est juste un préfixe de clé pour éviter les collisions entre
+    les 2 onglets qui peuvent partager le même `engine_files`.
+    """
+    if not engine_files:
+        return
+    open_key = f"audit_open_{tab_hint}"
+    if open_key not in st.session_state:
+        st.session_state[open_key] = False
+
+    c = st.columns([5, 2])
+    with c[1]:
+        label = (
+            "🔎 Fermer l'audit des mappings"
+            if st.session_state[open_key]
+            else "🔎 Vérifier les correspondances"
+        )
+        if st.button(
+            label,
+            key=f"audit_toggle_{tab_hint}",
+            use_container_width=True,
+            help=(
+                "Ouvre un tableau de tous les champs mappés pour chaque "
+                "fichier uploadé, avec édition individuelle et suppression. "
+                "Pratique pour corriger une correspondance sans toucher aux "
+                "autres."
+            ),
+        ):
+            st.session_state[open_key] = not st.session_state[open_key]
+            st.rerun()
+
+    if not st.session_state[open_key]:
+        return
+
+    with st.container(border=True):
+        st.markdown("#### 🗂️ Audit des correspondances")
+        st.caption(
+            "Un tableau par fichier. Multiselect = cibles mappées à cette "
+            "colonne. 🗑️ = retour à l'auto-détection (oublie la mémorisation). "
+            "💾 = enregistre toutes les cibles actuelles dans la mémoire."
+        )
+        # One expander per file
+        keys = sorted(engine_files.keys())
+        for k in keys:
+            info = engine_files[k]
+            slug = info.get("slug") or "?"
+            fname = info.get("filename") or k
+            sheet = info.get("sheet_name")
+            label = f"📄 {fname}" + (f" [{sheet}]" if sheet else "") + f" — `{slug}`"
+            with st.expander(label, expanded=len(keys) == 1):
+                _render_audit_table_contextual(k, engine_files)
+
+
+def render_mappings_audit_page() -> None:
+    """Chapitre 'Mappings mémorisés' du menu gauche — vue globale."""
+    st.title("🗂️ Mappings mémorisés")
+    st.caption(
+        "Ici, la liste des types de fichiers pour lesquels Revio a mémorisé "
+        "un mapping de colonnes. Chaque entrée te permet de voir les "
+        "correspondances enregistrées et d'en supprimer individuellement. "
+        "Pour MODIFIER un mapping (changer la colonne source d'un champ), "
+        "va dans **Import — Moteur de règles**, uploade le fichier, et "
+        "clique **Vérifier les correspondances** dans l'onglet Véhicules "
+        "ou Contrats."
+    )
+    slugs = _list_memorized_slugs()
+    if not slugs:
+        st.info(
+            "Rien en mémoire pour l'instant. Après un Mémoriser dans l'onglet "
+            "Import, les correspondances apparaîtront ici."
+        )
+        return
+    for slug in slugs:
+        with st.expander(f"📁 `{slug}`", expanded=False):
+            _render_audit_table_sidebar(slug)
 
 
 def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> None:
@@ -3592,6 +4172,9 @@ elif st.session_state.mode == "rules":
 
 elif st.session_state.mode == "normal":
     render_normalization_page()
+
+elif st.session_state.mode == "mappings":
+    render_mappings_audit_page()
 
 # ========== Classic mode: horizontal stepper above step content ==========
 elif st.session_state.mode == "classic":
