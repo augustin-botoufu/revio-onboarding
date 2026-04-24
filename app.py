@@ -2706,7 +2706,7 @@ def _extract_vp_from_vehicle_result(vehicle_result) -> dict[str, bool]:
 
 
 _CONTRACT_PSEUDO_SLUGS = {"backoffice", "ep_loueur", "api_plaque", "derived",
-                          "rule_engine", "rule", "*"}
+                          "rule_engine", "rule", "*", "__default__"}
 
 
 @functools.lru_cache(maxsize=1)
@@ -2736,22 +2736,75 @@ def _contract_fields_by_slug() -> dict[str, list[str]]:
     return {s: list(dict.fromkeys(fs)) for s, fs in out.items()}
 
 
-# ========== Jalon 4.3.1 — Mapping audit =====================================
+# ========== Jalon 4.3.1 / 4.3.3 — Mapping audit =============================
 # Écran d'audit des mappings. Un seul rendu partagé entre 2 chemins d'accès :
 #   · bouton "Vérifier les correspondances" dans les onglets Vehicles/Contracts
 #   · chapitre "Mappings mémorisés" dans le menu gauche (sans fichier chargé)
 #
-# L'état "source de vérité" pendant la session :
-#   · st.session_state.engine_overrides  — mapping effectif pour CE run
-#   · learned_columns.yml                — ce qui sera re-joué au prochain upload
+# 3 origines de binding depuis Jalon 4.3.3 :
+#   · ⚙️ YAML       — hardcodé dans vehicle.yml / contract.yml (non modifiable UI)
+#   · 🧠 mémorisé   — persisté dans learned_columns.yml via 💾 Mémoriser
+#   · ✎ session    — override posé manuellement dans cette session (pas mémorisé)
 #
-# Le bouton 💾 Mémoriser synchronise le YAML avec l'état effectif courant.
-# Le 🗑️ par ligne efface le mapping dans les deux.
+# Chaque pastille est coloriée par table cible (vehicle / contract / …).
 # ============================================================================
 
 _LEARNED_COLUMNS_PATH = (
     Path(__file__).parent / "src" / "rules" / "learned_columns.yml"
 )
+_VEHICLE_YML_PATH = (
+    Path(__file__).parent / "src" / "rules" / "vehicle.yml"
+)
+_CONTRACT_YML_PATH = (
+    Path(__file__).parent / "src" / "rules" / "contract.yml"
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _yaml_bindings_by_slug() -> dict[str, dict[str, dict[str, list[str]]]]:
+    """Jalon 4.3.3 — Parse vehicle.yml + contract.yml et inverse :
+
+        {slug: {table: {source_col: [field_names]}}}
+
+    N'inclut que les règles qui déclarent un ``column:`` explicite (binding
+    hardcodé dans la YAML). Les règles avec seulement ``column_hint:`` sont
+    ignorées — elles ne donnent pas de binding réel, juste un indice user.
+    Les pseudo-slugs (rule_engine, api_plaque, backoffice, derived, …) sont
+    exclus car ils ne correspondent pas à de vrais fichiers uploadés.
+
+    Cache LRU : le dict YAML ne change pas pendant la session (les YAML sont
+    du code, éditable seulement hors-UI).
+    """
+    out: dict[str, dict[str, dict[str, list[str]]]] = {}
+    yml_paths = [
+        ("vehicle", _VEHICLE_YML_PATH),
+        ("contract", _CONTRACT_YML_PATH),
+    ]
+    for table, yml_path in yml_paths:
+        try:
+            with open(yml_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+        except Exception:
+            continue
+        fields_spec = data.get("fields", {}) or {}
+        for field_name, spec in fields_spec.items():
+            for rule in spec.get("rules", []) or []:
+                src_slug = rule.get("source")
+                col = rule.get("column")
+                if not src_slug or not col:
+                    continue
+                if src_slug in _CONTRACT_PSEUDO_SLUGS:
+                    # pseudo-sources (rule_engine, derived, …) — pas de fichier
+                    continue
+                slug_map = out.setdefault(src_slug, {})
+                tbl_map = slug_map.setdefault(table, {})
+                tbl_map.setdefault(str(col), []).append(field_name)
+    # Dedup fields per (slug, table, col), preserve order
+    for slug, tables in out.items():
+        for tbl, cols in tables.items():
+            for col, fields in cols.items():
+                cols[col] = list(dict.fromkeys(fields))
+    return out
 
 
 def _all_audit_target_fields() -> list[tuple[str, str, str]]:
@@ -2797,73 +2850,161 @@ def _load_memorized_for_slug(slug: str) -> dict[str, dict[str, str]]:
     return out
 
 
+# Jalon 4.3.3 — Palette couleur des pastilles par table cible.
+# vehicle → vert, contract → bleu, driver → orange, insurance → violet.
+_TABLE_PILL_COLORS = {
+    "vehicle":   {"bg": "#DCFCE7", "fg": "#166534", "border": "#86EFAC"},
+    "contract":  {"bg": "#DBEAFE", "fg": "#1E40AF", "border": "#93C5FD"},
+    "driver":    {"bg": "#FFEDD5", "fg": "#9A3412", "border": "#FDBA74"},
+    "insurance": {"bg": "#EDE9FE", "fg": "#5B21B6", "border": "#C4B5FD"},
+}
+
+# Icônes d'origine du binding (Jalon 4.3.3).
+_ORIGIN_ICON = {
+    "yaml":      "⚙️",  # hardcodé dans vehicle.yml / contract.yml
+    "memorized": "🧠",  # persisté dans learned_columns.yml
+    "session":   "✎",   # override posé à la main dans cette session
+}
+_ORIGIN_LABEL = {
+    "yaml": "YAML (verrouillé)",
+    "memorized": "mémorisé",
+    "session": "session",
+}
+
+
+def _binding_pill_html(table: str, field: str, origin: str) -> str:
+    """Jalon 4.3.3 — Rend une pastille HTML pour un binding.
+
+    Couleur = table cible. Icône = origine du binding. YAML implique un
+    affichage "verrouillé" (bordure + tooltip).
+    """
+    colors = _TABLE_PILL_COLORS.get(
+        table, {"bg": "#F3F4F6", "fg": "#374151", "border": "#D1D5DB"}
+    )
+    icon = _ORIGIN_ICON.get(origin, "·")
+    origin_label = _ORIGIN_LABEL.get(origin, origin)
+    # YAML pills get a subtle dashed border to signal read-only.
+    border_style = "dashed" if origin == "yaml" else "solid"
+    return (
+        f"<span title='Origine : {origin_label}' "
+        f"style='background:{colors['bg']};color:{colors['fg']};"
+        f"padding:0.12rem 0.55rem;border-radius:999px;font-size:0.72rem;"
+        f"font-weight:500;border:1px {border_style} {colors['border']};"
+        f"display:inline-block;margin:0.1rem 0.25rem 0.1rem 0;"
+        f"line-height:1.5;white-space:nowrap'>"
+        f"{icon} {table}.{field}"
+        f"</span>"
+    )
+
+
 def _build_audit_rows(file_key: str, file_info: dict) -> list[dict]:
-    """Construit une ligne par colonne source du fichier.
+    """Jalon 4.3.3 — Construit une ligne par colonne source du fichier.
 
     Chaque ligne :
       - source_col : str (nom de la colonne telle qu'elle apparaît dans le df)
-      - bindings   : list[(table, field)] — cibles actuellement mappées à cette
-        colonne via engine_overrides OU memorized (mais pas encore actif).
-      - state      : "memorized" | "session" | "none"
+      - bindings   : list[dict] — chaque binding a {table, field, origin}
+        où origin ∈ "yaml" | "memorized" | "session".
 
-    Les colonnes de `__source_file`, `__source_sheet` ajoutées par
-    merge_engine_sources sont filtrées car elles ne sont pas des candidates
-    utiles pour un mapping utilisateur.
+    Règles de précédence :
+      · session override > YAML binding (si la field a un override session,
+        on suppose que l'user veut remplacer la règle YAML quel que soit le
+        col visé).
+      · session override = "memorized" si la valeur matche learned_columns.yml,
+        sinon "session" (modif à la volée).
+      · YAML binding n'apparaît que si (1) pas de session override pour cette
+        field ET (2) la colonne YAML est effectivement présente dans le df.
+
+    Les colonnes internes (__source_file, __source_sheet) sont filtrées.
     """
     df = file_info.get("df")
     slug = file_info.get("slug") or ""
     if df is None or df.empty:
         return []
 
-    # Current session bindings keyed by source column.
-    session_by_col: dict[str, list[tuple[str, str]]] = {}
+    df_cols = {str(c) for c in df.columns}
+
+    # 1. Session overrides keyed by field name.
+    session_overrides: dict[str, str] = {}
     current_overrides = st.session_state.get("engine_overrides", {}) or {}
     for (fk, field), src_col in current_overrides.items():
-        if fk != file_key or not src_col:
-            continue
-        # On n'a pas de table (vehicle/contract) dans la clé engine_overrides ;
-        # on recupère l'info en croisant avec _all_audit_target_fields (le même
-        # field peut exister dans vehicle ET contract → on ajoute les 2 liens).
-        for tbl, f, _ in _all_audit_target_fields():
-            if f == field:
-                session_by_col.setdefault(str(src_col), []).append((tbl, f))
+        if fk == file_key and src_col:
+            session_overrides[field] = str(src_col)
 
+    # 2. Memorized entries: {table: {field: col}}.
     memorized = _load_memorized_for_slug(slug)
-    memorized_by_col: dict[str, list[tuple[str, str]]] = {}
-    for tbl, fld_map in memorized.items():
-        for field, src_col in fld_map.items():
-            memorized_by_col.setdefault(str(src_col), []).append((tbl, field))
+
+    # 3. YAML bindings for this slug: {table: {col: [fields]}}.
+    yaml_map = _yaml_bindings_by_slug().get(slug, {})
+
+    # All possible (table, field) targets the session override can fan out to.
+    all_targets = _all_audit_target_fields()
+
+    bindings_by_col: dict[str, list[dict]] = {}
+
+    # (a) Session overrides fan out to all tables that declare this field.
+    for field, src_col in session_overrides.items():
+        for tbl, f, _ in all_targets:
+            if f != field:
+                continue
+            mem_col = memorized.get(tbl, {}).get(field)
+            origin = "memorized" if mem_col == src_col else "session"
+            bindings_by_col.setdefault(src_col, []).append({
+                "table": tbl,
+                "field": field,
+                "origin": origin,
+            })
+
+    # (b) YAML bindings on cols present in df, skipped when session overrides
+    #     the same field.
+    fields_with_session = set(session_overrides.keys())
+    for tbl, col_map in yaml_map.items():
+        for col, fields in col_map.items():
+            if col not in df_cols:
+                continue
+            for field in fields:
+                if field in fields_with_session:
+                    continue
+                bindings_by_col.setdefault(col, []).append({
+                    "table": tbl,
+                    "field": field,
+                    "origin": "yaml",
+                })
 
     rows: list[dict] = []
-    # Iterate dataframe columns in their natural order, skipping hidden ones.
     for col in df.columns:
         col_s = str(col)
         if col_s.startswith("__source_"):
             continue
-        session_bindings = session_by_col.get(col_s, [])
-        memorized_bindings = memorized_by_col.get(col_s, [])
-        # Deduplicate: merged view of all bindings for display.
-        merged_bindings: list[tuple[str, str]] = []
-        for b in session_bindings + memorized_bindings:
-            if b not in merged_bindings:
-                merged_bindings.append(b)
-        if any(b in memorized_bindings for b in merged_bindings):
-            state = "memorized"
-        elif merged_bindings:
-            state = "session"
-        else:
-            state = "none"
-        rows.append({
-            "source_col": col_s,
-            "bindings": merged_bindings,
-            "memorized": list(memorized_bindings),
-            "state": state,
-        })
+        bindings = bindings_by_col.get(col_s, [])
+        # Dedup (table, field, origin) triplets just in case.
+        seen: set[tuple[str, str, str]] = set()
+        dedup: list[dict] = []
+        for b in bindings:
+            key = (b["table"], b["field"], b["origin"])
+            if key not in seen:
+                seen.add(key)
+                dedup.append(b)
+        rows.append({"source_col": col_s, "bindings": dedup})
     return rows
 
 
+def _summarize_row_state(bindings: list[dict]) -> str:
+    """Agrège l'état global d'une ligne pour l'affichage récap (titre, badge)."""
+    if not bindings:
+        return "none"
+    origins = {b["origin"] for b in bindings}
+    # Priorité d'affichage : session > memorized > yaml > none
+    if "session" in origins:
+        return "session"
+    if "memorized" in origins:
+        return "memorized"
+    if "yaml" in origins:
+        return "yaml"
+    return "none"
+
+
 def _state_badge(state: str) -> str:
-    """Petit HTML badge pour la colonne État du tableau d'audit."""
+    """Petit HTML badge pour l'état global d'une ligne ou d'un slug."""
     if state == "memorized":
         return (
             "<span style='background:#DCFCE7;color:#166534;"
@@ -2876,6 +3017,12 @@ def _state_badge(state: str) -> str:
             "padding:0.1rem 0.55rem;border-radius:999px;font-size:0.72rem;"
             "font-weight:500;border:1px solid #BFDBFE'>✎ session</span>"
         )
+    if state == "yaml":
+        return (
+            "<span style='background:#F3F4F6;color:#374151;"
+            "padding:0.1rem 0.55rem;border-radius:999px;font-size:0.72rem;"
+            "font-weight:500;border:1px dashed #9CA3AF'>⚙️ YAML</span>"
+        )
     return (
         "<span style='background:#F3F4F6;color:#6B7280;"
         "padding:0.1rem 0.55rem;border-radius:999px;font-size:0.72rem;"
@@ -2884,7 +3031,12 @@ def _state_badge(state: str) -> str:
 
 
 def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
-    """Écran d'audit pour un fichier uploadé : édition + mémorisation + 🗑️.
+    """Jalon 4.3.3 — Écran d'audit pour un fichier uploadé.
+
+    Colonne "Mappé vers" : pastilles colorées par table cible, chaque pastille
+    portant une icône d'origine (⚙️ YAML / 🧠 mémorisé / ✎ session). Le
+    multiselect édite uniquement les bindings modifiables (session / mémorisé).
+    Les pastilles YAML sont affichées en lecture seule (hardcodé).
 
     Appelé depuis les onglets Vehicles/Contracts via le bouton
     "Vérifier les correspondances".
@@ -2910,17 +3062,27 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
         st.info("Aucune colonne détectée dans ce fichier.")
         return
 
-    # Toolbar
+    # --- Totals (caption) ----------------------------------------------------
     n_mapped = sum(1 for r in rows if r["bindings"])
-    n_memorized = sum(1 for r in rows if r["memorized"])
+    n_yaml = sum(
+        1 for r in rows for b in r["bindings"] if b["origin"] == "yaml"
+    )
+    n_memorized = sum(
+        1 for r in rows for b in r["bindings"] if b["origin"] == "memorized"
+    )
+    n_session = sum(
+        1 for r in rows for b in r["bindings"] if b["origin"] == "session"
+    )
     st.caption(
         f"📄 **{filename}**"
         + (f" [{sheet}]" if sheet else "")
-        + f" · slug `{slug}` · {len(rows)} colonne(s) dans le fichier · "
-        f"{n_mapped} mappé(s) · {n_memorized} mémorisé(s)"
+        + f" · slug `{slug}` · {len(rows)} colonne(s) · "
+        f"{n_mapped} mappée(s) — "
+        f"⚙️ {n_yaml} YAML · 🧠 {n_memorized} mémorisé(s) · "
+        f"✎ {n_session} session"
     )
 
-    # --- Header row -----------------------------------------------------
+    # --- Header row ----------------------------------------------------------
     hc = st.columns([3, 5, 1.2, 0.8])
     hc[0].markdown("**Colonne fichier**")
     hc[1].markdown("**Mappé vers**")
@@ -2928,19 +3090,31 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
     hc[3].markdown("**Action**")
     st.markdown("<hr style='margin:0.4rem 0'>", unsafe_allow_html=True)
 
-    # Track if anything needs saving
     user_email = st.session_state.get("current_user") or _current_user_email()
 
     for i, row in enumerate(rows):
         src = row["source_col"]
-        current_labels = [
-            f"{t}.{f}" for (t, f) in row["bindings"]
-            if f"{t}.{f}" in target_labels
+        bindings = row["bindings"]
+        yaml_pills = [b for b in bindings if b["origin"] == "yaml"]
+        editable = [b for b in bindings if b["origin"] != "yaml"]
+        memorized_bindings = [
+            (b["table"], b["field"]) for b in editable if b["origin"] == "memorized"
         ]
+        editable_labels = [f"{b['table']}.{b['field']}" for b in editable]
+        # Dedup preserving order.
+        current_labels: list[str] = []
+        for lbl in editable_labels:
+            if lbl not in current_labels and lbl in target_labels:
+                current_labels.append(lbl)
+
+        # Multiselect options: all targets MINUS those already locked by YAML
+        # for this source column (avoid confusing duplicates).
+        yaml_locked_labels = {f"{b['table']}.{b['field']}" for b in yaml_pills}
+        options = [lbl for lbl in target_labels if lbl not in yaml_locked_labels]
+
         widget_key = f"audit_ms_{file_key}_{i}_{src}"
         c = st.columns([3, 5, 1.2, 0.8])
         with c[0]:
-            # Show column name + sample values if available (compact)
             st.markdown(f"**`{src}`**")
             try:
                 sample = (
@@ -2953,57 +3127,51 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
             except Exception:
                 pass
         with c[1]:
+            # Pastilles (YAML + éditable) — visualisation pure, colorées par table.
+            if bindings:
+                pills_html = "".join(
+                    _binding_pill_html(b["table"], b["field"], b["origin"])
+                    for b in bindings
+                )
+                st.markdown(
+                    f"<div style='margin:0 0 0.4rem 0'>{pills_html}</div>",
+                    unsafe_allow_html=True,
+                )
+            # Multiselect : seulement les bindings modifiables (non-YAML).
             picked = st.multiselect(
                 label=f"bindings_{src}",
-                options=target_labels,
+                options=options,
                 default=current_labels,
                 key=widget_key,
                 label_visibility="collapsed",
-                placeholder="Aucune cible — tape pour chercher un champ",
+                placeholder=(
+                    "Ajouter/retirer une cible — tape pour chercher…"
+                    if not yaml_pills
+                    else "Pastilles ⚙️ verrouillées par la YAML — édite les autres ici"
+                ),
             )
-            # Reactively apply multi-select diff to engine_overrides.
             picked_set = set(picked)
             current_set = set(current_labels)
             added = picked_set - current_set
             removed = current_set - picked_set
             if added or removed:
                 for lbl in added:
+                    if lbl not in label_to_tblfield:
+                        continue
                     _tbl, field = label_to_tblfield[lbl]
                     st.session_state.engine_overrides[(file_key, field)] = src
                 for lbl in removed:
-                    _tbl, field = label_to_tblfield[lbl]
-                    # Only pop if the removed binding was pointing at THIS src
-                    if st.session_state.engine_overrides.get((file_key, field)) == src:
+                    if lbl not in label_to_tblfield:
+                        continue
+                    tbl, field = label_to_tblfield[lbl]
+                    if (st.session_state.engine_overrides.get(
+                            (file_key, field)) == src):
                         st.session_state.engine_overrides.pop(
                             (file_key, field), None
                         )
-                # invalidate results so user re-runs the engine
-                st.session_state.engine_result = None
-                st.session_state.contract_result = None
-                st.rerun()
-        with c[2]:
-            st.markdown(_state_badge(row["state"]), unsafe_allow_html=True)
-        with c[3]:
-            btn_key = f"audit_del_{file_key}_{i}_{src}"
-            if row["bindings"] or row["memorized"]:
-                if st.button(
-                    "🗑️",
-                    key=btn_key,
-                    help=(
-                        "Supprimer toutes les cibles pour cette colonne. "
-                        "Efface aussi la mémorisation (retour auto-détection "
-                        "au prochain upload)."
-                    ),
-                ):
-                    # Remove from engine_overrides
-                    for tbl, field in row["bindings"]:
-                        if (st.session_state.engine_overrides.get(
-                                (file_key, field)) == src):
-                            st.session_state.engine_overrides.pop(
-                                (file_key, field), None
-                            )
-                    # Remove from memorized
-                    for tbl, field in row["memorized"]:
+                    # Si c'était mémorisé, on oublie aussi la mémoire pour
+                    # éviter une re-hydratation au prochain upload.
+                    if (tbl, field) in memorized_bindings:
                         try:
                             unkcol.unregister_learned_column(
                                 _LEARNED_COLUMNS_PATH,
@@ -3013,8 +3181,6 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
                             )
                         except Exception:
                             pass
-                    # Persist YAML change to GitHub if configured
-                    if row["memorized"]:
                         try:
                             if gh.is_configured():
                                 yml_text = _LEARNED_COLUMNS_PATH.read_text(
@@ -3024,7 +3190,60 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
                                     yml_text,
                                     commit_message=(
                                         f"learned_columns: remove "
-                                        f"{slug}.{src} via audit"
+                                        f"{slug}.{tbl}.{field} via audit"
+                                    ),
+                                    author_email=user_email,
+                                )
+                        except Exception:
+                            pass
+                st.session_state.engine_result = None
+                st.session_state.contract_result = None
+                st.rerun()
+        with c[2]:
+            state = _summarize_row_state(bindings)
+            st.markdown(_state_badge(state), unsafe_allow_html=True)
+        with c[3]:
+            btn_key = f"audit_del_{file_key}_{i}_{src}"
+            if editable:
+                if st.button(
+                    "🗑️",
+                    key=btn_key,
+                    help=(
+                        "Supprime tous les bindings modifiables (session + "
+                        "mémorisé) pour cette colonne. Les pastilles ⚙️ YAML "
+                        "ne sont pas affectées (hardcodées)."
+                    ),
+                ):
+                    touched_memorized = False
+                    for b in editable:
+                        tbl, field = b["table"], b["field"]
+                        if (st.session_state.engine_overrides.get(
+                                (file_key, field)) == src):
+                            st.session_state.engine_overrides.pop(
+                                (file_key, field), None
+                            )
+                        if b["origin"] == "memorized":
+                            try:
+                                unkcol.unregister_learned_column(
+                                    _LEARNED_COLUMNS_PATH,
+                                    table=tbl,
+                                    source_slug=slug,
+                                    field_name=field,
+                                )
+                                touched_memorized = True
+                            except Exception:
+                                pass
+                    if touched_memorized:
+                        try:
+                            if gh.is_configured():
+                                yml_text = _LEARNED_COLUMNS_PATH.read_text(
+                                    encoding="utf-8"
+                                )
+                                gh.save_learned_columns_yaml(
+                                    yml_text,
+                                    commit_message=(
+                                        f"learned_columns: remove "
+                                        f"{slug}.{src} via audit row"
                                     ),
                                     author_email=user_email,
                                 )
@@ -3033,6 +3252,9 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
                     st.session_state.engine_result = None
                     st.session_state.contract_result = None
                     st.rerun()
+            elif yaml_pills:
+                # Verrouillé : pas d'action possible.
+                st.caption("🔒")
 
     # --- Bottom toolbar --------------------------------------------------
     st.markdown("---")
@@ -3131,33 +3353,51 @@ def _render_audit_table_contextual(file_key: str, engine_files: dict) -> None:
 
 
 def _render_audit_table_sidebar(slug: str) -> None:
-    """Écran d'audit pour un slug sélectionné depuis le menu gauche, sans
-    fichier uploadé : vue LECTURE des mappings mémorisés + 🗑️ par ligne.
+    """Jalon 4.3.3 — Vue d'audit sans fichier uploadé.
 
-    On ne peut pas proposer d'édition ici (pas de df → pas de liste de
-    colonnes source). Pour modifier, Augustin ouvre l'onglet d'import,
-    uploade le fichier, et clique "Vérifier les correspondances".
+    Affiche TOUS les bindings que Revio connaît pour un slug :
+      · ⚙️ YAML — hardcodé dans vehicle.yml / contract.yml (lecture seule)
+      · 🧠 mémorisé — présents dans learned_columns.yml (🗑️ par pastille)
+
+    Les mappings session ne sont pas visibles ici (pas de df → pas de colonne
+    à overrider). Pour éditer un mapping session, Augustin ouvre l'onglet
+    d'import puis clique "Vérifier les correspondances".
     """
+    # 1. Memorized bindings keyed by source col.
     memorized = _load_memorized_for_slug(slug)
-    total = sum(len(v) for v in memorized.values())
-    if total == 0:
+    memorized_by_col: dict[str, list[dict]] = {}
+    for tbl, fld_map in memorized.items():
+        for field, src_col in fld_map.items():
+            memorized_by_col.setdefault(str(src_col), []).append({
+                "table": tbl, "field": field, "origin": "memorized",
+            })
+
+    # 2. YAML bindings for this slug.
+    yaml_map = _yaml_bindings_by_slug().get(slug, {})
+    yaml_by_col: dict[str, list[dict]] = {}
+    for tbl, col_map in yaml_map.items():
+        for col, fields in col_map.items():
+            for field in fields:
+                yaml_by_col.setdefault(str(col), []).append({
+                    "table": tbl, "field": field, "origin": "yaml",
+                })
+
+    # Merge — one row per source col.
+    all_cols: set[str] = set(memorized_by_col) | set(yaml_by_col)
+    if not all_cols:
         st.info(
-            f"Aucun mapping mémorisé pour `{slug}`. "
+            f"Aucun mapping connu pour `{slug}`. "
             "Utilise l'onglet d'import pour en enregistrer."
         )
         return
 
-    # Group memorized bindings by source column to get the 1-row-per-column view
-    by_src: dict[str, list[tuple[str, str]]] = {}
-    for tbl, fld_map in memorized.items():
-        for field, src_col in fld_map.items():
-            by_src.setdefault(str(src_col), []).append((tbl, field))
-
+    n_yaml_total = sum(len(v) for v in yaml_by_col.values())
+    n_memorized_total = sum(len(v) for v in memorized_by_col.values())
     user_email = st.session_state.get("current_user") or _current_user_email()
 
     st.caption(
-        f"`{slug}` — {total} mapping(s) mémorisé(s) sur "
-        f"{len(by_src)} colonne(s) source. "
+        f"`{slug}` — ⚙️ {n_yaml_total} YAML · 🧠 {n_memorized_total} mémorisé(s) "
+        f"sur {len(all_cols)} colonne(s) source. "
         "Pour modifier un mapping, ouvre le fichier dans "
         "**Import — Moteur de règles**, puis clique "
         "**Vérifier les correspondances**."
@@ -3169,63 +3409,98 @@ def _render_audit_table_sidebar(slug: str) -> None:
     hc[3].markdown("**Action**")
     st.markdown("<hr style='margin:0.4rem 0'>", unsafe_allow_html=True)
 
-    for i, (src_col, bindings) in enumerate(sorted(by_src.items())):
+    for i, src_col in enumerate(sorted(all_cols)):
+        yaml_bindings = yaml_by_col.get(src_col, [])
+        memorized_bindings = memorized_by_col.get(src_col, [])
+        all_bindings = yaml_bindings + memorized_bindings
         c = st.columns([3, 5, 1.2, 0.8])
         c[0].markdown(f"**`{src_col}`**")
+        pills_html = "".join(
+            _binding_pill_html(b["table"], b["field"], b["origin"])
+            for b in all_bindings
+        )
         c[1].markdown(
-            " · ".join(
-                f"<span style='background:#EFF6FF;color:#1E40AF;"
-                f"padding:0.08rem 0.45rem;border-radius:999px;"
-                f"font-size:0.72rem;font-weight:500;border:1px solid "
-                f"#BFDBFE'>{t}.{f}</span>"
-                for (t, f) in bindings
-            ),
+            f"<div style='line-height:1.8'>{pills_html}</div>",
             unsafe_allow_html=True,
         )
-        c[2].markdown(_state_badge("memorized"), unsafe_allow_html=True)
+        state = _summarize_row_state(all_bindings)
+        c[2].markdown(_state_badge(state), unsafe_allow_html=True)
         with c[3]:
-            if st.button(
-                "🗑️", key=f"audit_sb_del_{slug}_{i}",
-                help="Oublier ce mapping mémorisé.",
-            ):
-                for tbl, field in bindings:
+            if memorized_bindings:
+                if st.button(
+                    "🗑️", key=f"audit_sb_del_{slug}_{i}",
+                    help=(
+                        "Oublie tous les mappings mémorisés pour cette "
+                        "colonne. Les pastilles ⚙️ YAML ne sont pas affectées."
+                    ),
+                ):
+                    for b in memorized_bindings:
+                        try:
+                            unkcol.unregister_learned_column(
+                                _LEARNED_COLUMNS_PATH,
+                                table=b["table"],
+                                source_slug=slug,
+                                field_name=b["field"],
+                            )
+                        except Exception:
+                            pass
                     try:
-                        unkcol.unregister_learned_column(
-                            _LEARNED_COLUMNS_PATH,
-                            table=tbl, source_slug=slug, field_name=field,
-                        )
+                        if gh.is_configured():
+                            yml_text = _LEARNED_COLUMNS_PATH.read_text(
+                                encoding="utf-8"
+                            )
+                            gh.save_learned_columns_yaml(
+                                yml_text,
+                                commit_message=(
+                                    f"learned_columns: remove {slug}.{src_col} "
+                                    "via sidebar audit"
+                                ),
+                                author_email=user_email,
+                            )
                     except Exception:
                         pass
-                try:
-                    if gh.is_configured():
-                        yml_text = _LEARNED_COLUMNS_PATH.read_text(
-                            encoding="utf-8"
-                        )
-                        gh.save_learned_columns_yaml(
-                            yml_text,
-                            commit_message=(
-                                f"learned_columns: remove {slug}.{src_col} "
-                                "via sidebar audit"
-                            ),
-                            author_email=user_email,
-                        )
-                except Exception:
-                    pass
-                st.rerun()
+                    st.rerun()
+            else:
+                # Purement YAML → lecture seule.
+                st.caption("🔒")
 
 
-def _list_memorized_slugs() -> list[str]:
-    """Slugs présents dans learned_columns.yml (toutes tables confondues)."""
+def _list_known_slugs() -> list[dict]:
+    """Jalon 4.3.3 — Tous les slugs connus de Revio (YAML + mémorisé).
+
+    Retourne une liste de dicts {slug, n_yaml, n_memorized} triée par slug,
+    pour alimenter la page "Mappings mémorisés" côté menu gauche.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    # (a) Slugs déclarés dans vehicle.yml / contract.yml.
+    yaml_map = _yaml_bindings_by_slug()
+    for slug, tables in yaml_map.items():
+        n = sum(
+            len(fields)
+            for col_map in tables.values()
+            for fields in col_map.values()
+        )
+        counts.setdefault(slug, {"yaml": 0, "memorized": 0})["yaml"] += n
+    # (b) Slugs présents dans learned_columns.yml.
     try:
         data = unkcol.load_learned_patterns(_LEARNED_COLUMNS_PATH)
     except Exception:
-        return []
-    out: set[str] = set()
-    patterns_node = data.get("patterns", {}) or {}
+        data = {}
+    patterns_node = (data or {}).get("patterns", {}) or {}
     for table in ("vehicle", "contract"):
-        for slug_key in (patterns_node.get(table, {}) or {}).keys():
-            out.add(slug_key)
-    return sorted(out)
+        slug_node = patterns_node.get(table, {}) or {}
+        for slug, fld_map in slug_node.items():
+            counts.setdefault(slug, {"yaml": 0, "memorized": 0})
+            counts[slug]["memorized"] += len(fld_map or {})
+    return [
+        {"slug": s, "n_yaml": c["yaml"], "n_memorized": c["memorized"]}
+        for s, c in sorted(counts.items())
+    ]
+
+
+# Alias rétrocompat (pour du code legacy qui référencerait encore l'ancien nom).
+def _list_memorized_slugs() -> list[str]:
+    return [e["slug"] for e in _list_known_slugs() if e["n_memorized"] > 0]
 
 
 def _render_audit_button_section(engine_files: dict, tab_hint: str) -> None:
@@ -3268,9 +3543,12 @@ def _render_audit_button_section(engine_files: dict, tab_hint: str) -> None:
     with st.container(border=True):
         st.markdown("#### 🗂️ Audit des correspondances")
         st.caption(
-            "Un tableau par fichier. Multiselect = cibles mappées à cette "
-            "colonne. 🗑️ = retour à l'auto-détection (oublie la mémorisation). "
-            "💾 = enregistre toutes les cibles actuelles dans la mémoire."
+            "Un tableau par fichier. Chaque pastille = un binding "
+            "(⚙️ YAML verrouillé · 🧠 mémorisé · ✎ session). Couleur = "
+            "table cible (vert vehicle, bleu contract). Le multiselect édite "
+            "les pastilles modifiables. 🗑️ = oublie toutes les pastilles "
+            "modifiables pour cette colonne. 💾 = enregistre les bindings "
+            "session en mémoire."
         )
         # One expander per file
         keys = sorted(engine_files.keys())
@@ -3285,26 +3563,50 @@ def _render_audit_button_section(engine_files: dict, tab_hint: str) -> None:
 
 
 def render_mappings_audit_page() -> None:
-    """Chapitre 'Mappings mémorisés' du menu gauche — vue globale."""
+    """Jalon 4.3.3 — Chapitre 'Mappings mémorisés' du menu gauche.
+
+    Liste tous les types de fichiers (slugs) que Revio sait traiter, avec
+    compteurs ⚙️ YAML / 🧠 mémorisé. Depuis Jalon 4.3.3 : on inclut les slugs
+    hardcodés dans les YAML (pas seulement ceux mémorisés à la main).
+    """
     st.title("🗂️ Mappings mémorisés")
     st.caption(
-        "Ici, la liste des types de fichiers pour lesquels Revio a mémorisé "
-        "un mapping de colonnes. Chaque entrée te permet de voir les "
-        "correspondances enregistrées et d'en supprimer individuellement. "
-        "Pour MODIFIER un mapping (changer la colonne source d'un champ), "
-        "va dans **Import — Moteur de règles**, uploade le fichier, et "
-        "clique **Vérifier les correspondances** dans l'onglet Véhicules "
-        "ou Contrats."
+        "Liste des types de fichiers que Revio sait traiter. Chaque entrée "
+        "affiche les correspondances connues, regroupées par origine : "
+        "**⚙️ YAML** (hardcodé dans `vehicle.yml` / `contract.yml`, non "
+        "modifiable depuis l'UI) et **🧠 mémorisé** (enregistré via le bouton "
+        "💾 Mémoriser). Pour ajouter, modifier ou supprimer un mapping, va "
+        "dans **Import — Moteur de règles**, uploade le fichier, et clique "
+        "**Vérifier les correspondances**."
     )
-    slugs = _list_memorized_slugs()
-    if not slugs:
+    entries = _list_known_slugs()
+    if not entries:
         st.info(
-            "Rien en mémoire pour l'instant. Après un Mémoriser dans l'onglet "
-            "Import, les correspondances apparaîtront ici."
+            "Aucun slug connu — c'est inattendu (les YAML de règles devraient "
+            "en déclarer au moins quelques-uns)."
         )
         return
-    for slug in slugs:
-        with st.expander(f"📁 `{slug}`", expanded=False):
+    # Sticky summary on top: totals per origin.
+    total_yaml = sum(e["n_yaml"] for e in entries)
+    total_mem = sum(e["n_memorized"] for e in entries)
+    st.caption(
+        f"**{len(entries)}** slug(s) connu(s) — "
+        f"⚙️ {total_yaml} binding(s) YAML · 🧠 {total_mem} binding(s) mémorisé(s)."
+    )
+    for entry in entries:
+        slug = entry["slug"]
+        emoji, label, _ = slug_display(slug)
+        header = f"{emoji} `{slug}`"
+        if label and label != slug:
+            header += f" — {label}"
+        badges = []
+        if entry["n_yaml"]:
+            badges.append(f"⚙️ {entry['n_yaml']}")
+        if entry["n_memorized"]:
+            badges.append(f"🧠 {entry['n_memorized']}")
+        if badges:
+            header += " · " + " · ".join(badges)
+        with st.expander(header, expanded=False):
             _render_audit_table_sidebar(slug)
 
 
