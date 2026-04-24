@@ -38,7 +38,7 @@ TABLES: dict[str, dict[str, Any]] = {
     "contract": {
         "label": "📄 Contrats",
         "yaml_file": "contract.yml",
-        "available": False,
+        "available": True,
     },
     "driver": {
         "label": "👤 Drivers",
@@ -88,6 +88,44 @@ FIELD_CATEGORIES: dict[str, list[tuple[str, list[str]]]] = {
         (
             "🖼️ Média",
             ["imageUrl"],
+        ),
+    ],
+    "contract": [
+        (
+            "🪪 Identification",
+            ["plate", "number", "partnerId"],
+        ),
+        (
+            "📅 Dates & durée",
+            [
+                "startDate", "endDate", "durationMonths",
+                "restitutionDate", "factureDate",
+            ],
+        ),
+        (
+            "📏 Kilométrage",
+            ["contractedMileage", "maxMileage", "extraKmPrice"],
+        ),
+        (
+            "💰 Valeurs & TVA",
+            ["vehicleValue", "batteryValue", "isHT", "totalPrice"],
+        ),
+        (
+            "🛡️ Assurance",
+            [
+                "civilLiabilityPrice", "legalProtectionPrice",
+                "theftFireAndGlassPrice", "allRisksPrice",
+                "financialLossPrice",
+            ],
+        ),
+        (
+            "🔧 Services",
+            [
+                "maintenancePrice", "maintenanceNetwork",
+                "replacementVehiclePrice",
+                "tiresPrice", "tiresType", "tiresNetwork",
+                "gasCardPrice", "tollCardPrice",
+            ],
         ),
     ],
 }

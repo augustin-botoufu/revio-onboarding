@@ -588,6 +588,46 @@ def fetch_value_mappings_yaml() -> Optional[str]:
     return remote.text if remote.sha else None
 
 
+def save_learned_patterns_yaml(
+    yaml_text: str,
+    *,
+    commit_message: str = "learned_patterns: update via app",
+    author_email: Optional[str] = None,
+) -> dict:
+    """Commit the full learned_patterns.yml to GitHub (Jalon 4.2 — unknown
+    columns flow).
+
+    Unlike ``save_pattern`` (which does surgical upserts keyed by pattern id),
+    this is a whole-file commit used by the « colonne non identifiée » flow
+    where the app has already serialized the complete YAML via
+    ``unknown_columns.register_learned_column`` + ``learned_patterns.dump``.
+    Retries on sha conflicts.
+    """
+    cfg = get_config()
+    path = cfg.path  # already defaults to learned_patterns.yml via DEFAULT_PATH
+    msg = commit_message
+
+    last_err: Optional[GitHubConflict] = None
+    for _attempt in range(_MAX_CONFLICT_RETRIES):
+        remote = fetch_file(cfg, path)
+        if remote.text == yaml_text:
+            return {"skipped": True, "reason": "no_change"}
+        try:
+            return commit_file_at(
+                cfg, path, yaml_text,
+                sha=remote.sha, message=msg, author_email=author_email,
+            )
+        except GitHubConflict as e:
+            last_err = e
+            continue
+    assert last_err is not None  # pragma: no cover
+    raise GitHubSyncError(
+        "Écritures concurrentes sur learned_patterns.yml, abandon après "
+        f"{_MAX_CONFLICT_RETRIES} essais. Réessaie dans quelques secondes.",
+        cause=last_err,
+    )
+
+
 def save_value_mappings_yaml(
     yaml_text: str,
     *,

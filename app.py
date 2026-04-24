@@ -2071,7 +2071,6 @@ def _render_vehicle_tab_body(engine_files: dict) -> None:
                     source_dfs,
                     manual_column_overrides=engine_overrides_for_run,
                     priority_overrides=vehicle_overrides or None,
-                    value_mappings=st.session_state.value_mappings,
                 )
             # Jalon 2.7 — automatic AI fallback for cells the cache couldn't
             # normalize. Best effort: any error surfaces in the report but
@@ -2418,7 +2417,12 @@ def _render_contract_tab_body(engine_files: dict) -> None:
     col_a.metric("Contrats produits", len(df))
     col_b.metric("Conflits détectés", len(result.conflicts_by_cell or {}))
     col_c.metric("Contrats orphelins", len(result.orphan_df) if result.orphan_df is not None else 0)
-    col_d.metric("Colonnes non identifiées", len(result.unknown_column_requests or []))
+    # Count distinct *fields* waiting for mapping (not (plate,number,field) tuples).
+    distinct_unknown_fields = len({
+        (r.get("field") if isinstance(r, dict) else r.field)
+        for r in (result.unknown_column_requests or [])
+    })
+    col_d.metric("Colonnes non identifiées", distinct_unknown_fields)
 
     st.dataframe(df, use_container_width=True)
 
@@ -2502,40 +2506,85 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
         cols_by_slug[slug] = [str(c) for c in df.columns]
         df_by_slug[slug] = df
 
+    # Dedup defensively in case older contract_engine versions still emit
+    # one request per (plate, number, field). Group by field_name and keep
+    # the largest sample_pairs / affected_count we saw.
+    by_field: dict[str, dict] = {}
     for req in requests:
-        field = req.get("field") if isinstance(req, dict) else req.field
-        plate = req.get("plate") if isinstance(req, dict) else req.plate
-        number = req.get("number") if isinstance(req, dict) else req.number
-        candidates = req.get("candidate_sources") if isinstance(req, dict) else req.candidate_sources
-        hint = req.get("hint") if isinstance(req, dict) else req.hint
+        r = req if isinstance(req, dict) else {
+            "field": req.field, "candidate_sources": req.candidate_sources,
+            "hint": req.hint, "plate": req.plate, "number": req.number,
+        }
+        field_name = r.get("field")
+        if not field_name:
+            continue
+        prev = by_field.get(field_name)
+        if prev is None:
+            by_field[field_name] = {
+                "field": field_name,
+                "candidate_sources": r.get("candidate_sources") or [],
+                "hint": r.get("hint"),
+                "affected_count": r.get("affected_count", 1),
+                "total_rows": r.get("total_rows"),
+                "sample_pairs": list(r.get("sample_pairs") or [
+                    (r.get("plate"), r.get("number"))
+                ]),
+            }
+        else:
+            prev["affected_count"] = prev.get("affected_count", 0) + r.get("affected_count", 1)
+            if len(prev["sample_pairs"]) < 3:
+                sp = r.get("sample_pairs") or [(r.get("plate"), r.get("number"))]
+                for pair in sp:
+                    if pair not in prev["sample_pairs"]:
+                        prev["sample_pairs"].append(pair)
+                    if len(prev["sample_pairs"]) >= 3:
+                        break
+
+    for field, req in by_field.items():
+        candidates = req.get("candidate_sources") or []
+        hint = req.get("hint")
+        affected = req.get("affected_count") or 0
+        total = req.get("total_rows")
+        samples = req.get("sample_pairs") or []
 
         available_slugs = [s for s in candidates if s in cols_by_slug] or (["client_file"] if "client_file" in cols_by_slug else [])
         if not available_slugs:
-            st.warning(f"Aucune source chargée ne peut porter `{field}` ({plate} / {number}).")
+            st.warning(f"Aucune source chargée ne peut porter `{field}`.")
             continue
 
         with st.container(border=True):
-            st.markdown(f"**Champ manquant : `{field}`** — contrat {plate} / {number}")
+            header = f"**Champ manquant : `{field}`**"
+            if total:
+                header += f" — {affected}/{total} contrats concernés"
+            elif affected:
+                header += f" — {affected} contrats concernés"
+            st.markdown(header)
             if hint:
                 st.caption(f"💡 {hint}")
+            if samples:
+                preview = ", ".join(
+                    f"{p}/{n}" for p, n in samples if p or n
+                )
+                if preview:
+                    st.caption(f"Exemples : {preview}…")
             pick_slug = st.selectbox(
                 "Source",
                 options=available_slugs,
-                key=f"unk_slug_{field}_{plate}_{number}",
+                key=f"unk_slug_{field}",
             )
             available_cols = [""] + cols_by_slug.get(pick_slug, [])
-            prev = st.session_state.contract_unknown_resolved.get((pick_slug, field), "")
-            default_idx = available_cols.index(prev) if prev in available_cols else 0
+            prev_col = st.session_state.contract_unknown_resolved.get((pick_slug, field), "")
+            default_idx = available_cols.index(prev_col) if prev_col in available_cols else 0
             pick_col = st.selectbox(
                 "Colonne",
                 options=available_cols,
                 index=default_idx,
-                key=f"unk_col_{field}_{plate}_{number}",
+                key=f"unk_col_{field}",
             )
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("💾 Mémoriser + appliquer",
-                             key=f"unk_save_{field}_{plate}_{number}",
+                             key=f"unk_save_{field}",
                              use_container_width=True,
                              type="primary",
                              disabled=not pick_col):
@@ -2567,7 +2616,7 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
             with c2:
                 if (pick_slug, field) in st.session_state.contract_unknown_resolved:
                     if st.button("↺ Oublier ce mapping",
-                                 key=f"unk_forget_{field}_{plate}_{number}",
+                                 key=f"unk_forget_{field}",
                                  use_container_width=True):
                         st.session_state.contract_unknown_resolved.pop((pick_slug, field), None)
                         st.rerun()

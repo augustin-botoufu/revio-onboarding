@@ -599,26 +599,42 @@ def apply_rules(
                     orphan_df.at[key, field_name] = val
         orphan_df.index.name = "contract_key"
 
-    # Unknown column requests: for each (key, field) pair still None where
-    # at least one rule existed but had no column / no header in source,
-    # queue an interactive request (Jalon 4.1.7).
+    # Unknown column requests: one entry per mandatory field left unresolved
+    # on any row, not per (key, field) pair — the candidate sources and hint
+    # come from the YAML spec, so all rows share the same card. We aggregate
+    # a sample of affected keys + a total count for the UI (Jalon 4.2.3).
     unknown_requests: list[dict] = []
     for field_name, spec in fields_spec.items():
         if not spec.get("mandatory"):
             continue
-        for key in all_keys:
-            if not _is_null(out_df.at[key, field_name]):
-                continue
-            # check if any rule exists but we failed to resolve
-            if spec.get("rules"):
-                plate, number = split_key(key)
-                candidate_sources = [r.get("source") for r in spec["rules"]
-                                     if r.get("source") and r.get("source") not in {"rule_engine", "derived"}]
-                unknown_requests.append({
-                    "plate": plate, "number": number, "field": field_name,
-                    "candidate_sources": candidate_sources,
-                    "hint": spec.get("notes") or spec.get("description"),
-                })
+        if not spec.get("rules"):
+            continue
+        affected_keys: list[str] = [
+            key for key in all_keys if _is_null(out_df.at[key, field_name])
+        ]
+        if not affected_keys:
+            continue
+        candidate_sources = [
+            r.get("source") for r in spec["rules"]
+            if r.get("source") and r.get("source") not in {"rule_engine", "derived"}
+        ]
+        # Sample a few keys for the UI preview ("ex : AB-123-CD / 12345").
+        sample_pairs: list[tuple[str, str]] = []
+        for k in affected_keys[:3]:
+            p, n = split_key(k)
+            sample_pairs.append((p, n))
+        unknown_requests.append({
+            "field": field_name,
+            "candidate_sources": candidate_sources,
+            "hint": spec.get("notes") or spec.get("description"),
+            "affected_count": len(affected_keys),
+            "total_rows": len(all_keys),
+            "sample_pairs": sample_pairs,
+            # Keep first pair for backwards-compat with older UI code that
+            # still reads req["plate"] / req["number"].
+            "plate": sample_pairs[0][0] if sample_pairs else None,
+            "number": sample_pairs[0][1] if sample_pairs else None,
+        })
 
     return ContractEngineResult(
         df=out_df, issues=issues,
