@@ -101,10 +101,21 @@ def load_rules(path: str | Path) -> dict:
 # ---------- Key helpers ----------
 
 
-def _make_key(plate: Any, number: Any) -> Optional[str]:
+def _make_key(plate: Any, number: Any, plate_only: bool = False) -> Optional[str]:
+    """Build a composite key.
+
+    In normal mode: ``"{plate}|{number}"`` — both required.
+    In plate-only mode: ``"{plate}|*"`` — marker `*` means "no contract
+    number in source; key by plate alone". All sources in the same run
+    MUST use the same mode, otherwise joins silently mis-align.
+    """
     p = plate_for_matching(plate) if plate is not None else None
+    if not p:
+        return None
+    if plate_only:
+        return f"{p}|*"
     n = str(number).strip() if number is not None and str(number).strip() else None
-    if not p or not n:
+    if not n:
         return None
     return f"{p}|{n}"
 
@@ -125,20 +136,70 @@ def _find_column(df: pd.DataFrame, candidates: list[str]) -> Optional[str]:
 
 
 _PLATE_CANDS = ["plaque", "immat", "n° immat", "no immat", "plate"]
-_NUMBER_CANDS = ["numéro contrat", "numero contrat", "n° contrat", "no contrat",
-                 "contrat", "number", "réf", "ref"]
+
+# Strong, unambiguous markers for "numéro de contrat" — no false positives.
+_NUMBER_STRONG = [
+    "numéro contrat", "numero contrat", "numéro de contrat", "numero de contrat",
+    "n° contrat", "no contrat", "n°contrat", "n° de contrat",
+    "n°contr", "nocontr", "contract number", "contract_number",
+    "réf contrat", "ref contrat", "référence contrat", "reference contrat",
+]
+# Loose markers — accepted ONLY if the column doesn't also mention a reject
+# token (km, durée, date, loyer, avantage en nature…). The bare word "contrat"
+# used to catch "Km contrat" in the client file; hence the reject guard.
+_NUMBER_LOOSE = ["contrat", "number", "réf", "ref"]
+_NUMBER_REJECT = [
+    "km", "kilom", "kilomét", "kilomet",
+    "durée", "duree", "date", "début", "debut", "fin", "echéance", "echeance",
+    "loyer", "aen", "avantage",
+    "marque", "modèle", "modele", "couleur", "immatric",
+]
 
 
-def _index_by_composite(df: pd.DataFrame) -> pd.DataFrame:
+def _find_number_column(df: pd.DataFrame) -> Optional[str]:
+    """Detect the contract-number column, rejecting false positives.
+
+    Uses two passes:
+      1. Strong markers (e.g. "N° Contrat", "Numéro de contrat") win outright.
+      2. Loose markers (e.g. "contrat", "ref") match only if the column
+         header does NOT contain a reject token like "km", "durée", "date"…
+    """
+    for col in df.columns:
+        low = str(col).strip().lower()
+        for c in _NUMBER_STRONG:
+            if c in low:
+                return col
+    for col in df.columns:
+        low = str(col).strip().lower()
+        if any(rt in low for rt in _NUMBER_REJECT):
+            continue
+        for c in _NUMBER_LOOSE:
+            if c in low:
+                return col
+    return None
+
+
+def _index_by_composite(df: pd.DataFrame, plate_only: bool = False) -> pd.DataFrame:
+    """Index a source df by composite key.
+
+    With ``plate_only=True``, key by plate alone (first row per plate wins).
+    Used when the client file has no contract-number column — all other
+    sources must then switch to plate-only too so joins align.
+    """
     if df is None or df.empty:
         return df
     out = df.copy()
     out["__src_row__"] = range(len(out))
     plate_col = "plate" if "plate" in out.columns else _find_column(out, _PLATE_CANDS)
-    number_col = "number" if "number" in out.columns else _find_column(out, _NUMBER_CANDS)
-    if plate_col is None or number_col is None:
-        return out  # caller will skip this source silently
-    keys = [_make_key(p, n) for p, n in zip(out[plate_col], out[number_col])]
+    if plate_only:
+        if plate_col is None:
+            return out
+        keys = [_make_key(p, None, plate_only=True) for p in out[plate_col]]
+    else:
+        number_col = "number" if "number" in out.columns else _find_number_column(out)
+        if plate_col is None or number_col is None:
+            return out  # caller will skip this source silently
+        keys = [_make_key(p, n) for p, n in zip(out[plate_col], out[number_col])]
     out["__key__"] = keys
     out = out.dropna(subset=["__key__"])
     out = out.drop_duplicates(subset=["__key__"], keep="first")
@@ -220,10 +281,19 @@ def _source_row_for(src_df: pd.DataFrame, key: Any) -> Optional[int]:
         return None
 
 
+# Constant-value transforms: the YAML rule has ``source: '*'`` and a
+# ``const_XX`` transform. They emit a fixed value regardless of input.
+_CONST_TRANSFORMS = {
+    "const_FR": "FR",
+}
+
+
 def _apply_rule_transform(raw: Any, transform_name: str) -> tuple[Any, list[str]]:
     # Contract engine knows a couple of transforms the Vehicle transforms
     # registry may not (they're specific to the contract spec).
     name = transform_name or "passthrough"
+    if name in _CONST_TRANSFORMS:
+        return _CONST_TRANSFORMS[name], []
     if name in {"cross_check", "BANNED", "rule_isHT_from_VP_EP",
                 "rule_isHT_from_VP_API", "compute_months",
                 "sum_whitelist", "regex_number", "regex_duration",
@@ -261,6 +331,25 @@ def _resolve_cell(
         transform_name = rule.get("transform", "passthrough")
         if transform_name == "cross_check":
             # Not a value contributor — used only for anomaly detection.
+            continue
+
+        # Constant-transform rules (source: '*' in YAML) don't read from
+        # any source column — they emit a fixed value (e.g. const_FR → "FR").
+        if source_slug == "*":
+            val, warns = _apply_rule_transform(None, transform_name)
+            if warns:
+                parse_warnings_by_cell.setdefault((key, field_name), []).extend(warns)
+            if _is_null(val):
+                continue
+            contributions.append({
+                "priority": prio,
+                "source": "rule_engine",
+                "value": val,
+                "column": rule.get("column") or "(constante)",
+                "src_row": None,
+                "transform": transform_name,
+                "warnings": list(warns) if warns else [],
+            })
             continue
 
         src_df = indexed_sources.get(source_slug)
@@ -492,8 +581,33 @@ def apply_rules(
     issues: list[Issue] = []
     lineage = LineageStore()
 
+    # Detect plate-only mode: if the client file has no detectable contract
+    # number column, ALL sources must be indexed by plate alone, otherwise
+    # joins silently mis-align (client keyed by "PLATE|170000" from a "Km
+    # contrat" false-positive while EP is keyed by "PLATE|W90322"). In that
+    # case, we key every source by plate alone (first row per plate wins).
+    plate_only_mode = False
+    client_file_raw = source_dfs.get("client_file")
+    if client_file_raw is not None and not client_file_raw.empty:
+        has_number_col = (
+            "number" in client_file_raw.columns
+            or _find_number_column(client_file_raw) is not None
+        )
+        if not has_number_col:
+            plate_only_mode = True
+            issues.append(Issue(
+                plate=None, number=None, field="number", source="__engine__",
+                warning=(
+                    "Aucun numéro de contrat détecté dans le fichier client — "
+                    "indexation par plaque seule sur tous les fichiers. "
+                    "Si plusieurs contrats partagent la même plaque, seul le "
+                    "premier est retenu par source."
+                ),
+            ))
+
     indexed: dict[str, pd.DataFrame] = {
-        slug: _index_by_composite(df) for slug, df in source_dfs.items()
+        slug: _index_by_composite(df, plate_only=plate_only_mode)
+        for slug, df in source_dfs.items()
     }
 
     client_df = indexed.get("client_file")
@@ -558,6 +672,48 @@ def apply_rules(
             if conflicts:
                 conflicts_by_cell[(key, field_name)] = conflicts
 
+    # Backfill `plate` and `number` fields from the composite key when no
+    # rule successfully populated them. Rationale: the client-file YAML rule
+    # for `plate` declares `column: 'Plaque / Immatriculation'` but real
+    # client files often use "Immat" / "Immatriculation" / etc. — the
+    # heuristic column-detector already found it to build the key; we can
+    # surface that same plate on the output row. Same for `number` (except
+    # in plate-only mode where number is the sentinel `*`, which we skip).
+    if "plate" in out_df.columns:
+        for key in all_keys:
+            if not _is_null(out_df.at[key, "plate"]):
+                continue
+            p, _ = split_key(key)
+            if p:
+                out_df.at[key, "plate"] = p
+                source_by_cell[(key, "plate")] = "derived"
+                lineage.record(LineageRecord(
+                    table="contract", key=key, field="plate",
+                    value=p, source_used="derived",
+                    source_col="(clé composite)", source_row=None, priority=99,
+                    transform="from_composite_key",
+                    rule_id=build_rule_id("contract", "plate", "derived", 99),
+                    conflicts_ignored=[],
+                    notes="Plaque reconstruite depuis la clé composite (aucune règle YAML ne l'a remplie).",
+                ))
+    if "number" in out_df.columns and not plate_only_mode:
+        for key in all_keys:
+            if not _is_null(out_df.at[key, "number"]):
+                continue
+            _, n = split_key(key)
+            if n and n != "*":
+                out_df.at[key, "number"] = n
+                source_by_cell[(key, "number")] = "derived"
+                lineage.record(LineageRecord(
+                    table="contract", key=key, field="number",
+                    value=n, source_used="derived",
+                    source_col="(clé composite)", source_row=None, priority=99,
+                    transform="from_composite_key",
+                    rule_id=build_rule_id("contract", "number", "derived", 99),
+                    conflicts_ignored=[],
+                    notes="Numéro reconstruit depuis la clé composite.",
+                ))
+
     # Cross-check: plates in lessor files but absent from client_file → anomaly
     for slug, df in indexed.items():
         if slug in ("client_file", "api_plaque") or df is None or df.empty:
@@ -568,6 +724,8 @@ def apply_rules(
             if not isinstance(k, str) or "|" not in k:
                 continue
             plate, number = split_key(k)
+            if number == "*":
+                number = None
             if has_client and k not in client_df.index:
                 # logged as anomaly (will go into contract_errors.xlsx)
                 issues.append(Issue(
@@ -597,6 +755,19 @@ def apply_rules(
                 )
                 if val is not None:
                     orphan_df.at[key, field_name] = val
+        # Same backfill as main df: plate + number from composite key.
+        if "plate" in orphan_df.columns:
+            for key in orphan_keys:
+                if _is_null(orphan_df.at[key, "plate"]):
+                    p, _ = split_key(key)
+                    if p:
+                        orphan_df.at[key, "plate"] = p
+        if "number" in orphan_df.columns and not plate_only_mode:
+            for key in orphan_keys:
+                if _is_null(orphan_df.at[key, "number"]):
+                    _, n = split_key(key)
+                    if n and n != "*":
+                        orphan_df.at[key, "number"] = n
         orphan_df.index.name = "contract_key"
 
     # Unknown column requests: one entry per mandatory field left unresolved
@@ -619,9 +790,13 @@ def apply_rules(
             if r.get("source") and r.get("source") not in {"rule_engine", "derived"}
         ]
         # Sample a few keys for the UI preview ("ex : AB-123-CD / 12345").
+        # In plate-only mode, the "number" slot is the sentinel '*' — blank it
+        # so the UI displays just the plate instead of "AB-123-CD / *".
         sample_pairs: list[tuple[str, str]] = []
         for k in affected_keys[:3]:
             p, n = split_key(k)
+            if n == "*":
+                n = ""
             sample_pairs.append((p, n))
         unknown_requests.append({
             "field": field_name,

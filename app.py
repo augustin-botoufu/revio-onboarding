@@ -2344,11 +2344,46 @@ def render_engine_page():
 
 
 # ========== Contract tab body (Jalon 4.2.2) — run + results + unknown cols ==========
+def _build_contract_source_dfs(engine_files: dict) -> dict:
+    """Flatten ``engine_files`` into ``{slug: concatenated_df}`` for the
+    Contract engine. Files with no slug or empty dataframes are dropped.
+    Multiple files sharing a slug are concatenated (same behaviour as the
+    Vehicle tab's merge_engine_sources but without per-field renames — the
+    Contract engine handles column detection itself via heuristics)."""
+    source_dfs: dict = {}
+    for _key, info in engine_files.items():
+        slug = info.get("slug")
+        if not slug:
+            continue
+        df = info.get("df")
+        if df is None or df.empty:
+            continue
+        if slug in source_dfs:
+            source_dfs[slug] = pd.concat(
+                [source_dfs[slug], df], ignore_index=True, sort=False,
+            )
+        else:
+            source_dfs[slug] = df.copy()
+    return source_dfs
+
+
 def _render_contract_tab_body(engine_files: dict) -> None:
-    """Contract-specific workspace: run button, results, and the unknown-
-    columns UI. Assumes ``engine_files`` is already populated by the shared
-    uploader — files whose slugs aren't declared in ``contract.yml`` are
-    silently ignored by the Contract engine."""
+    """Contract-specific workspace.
+
+    Flow (parité Vehicle tab, Jalon 4.2.5) :
+    1. Bandeau explicatif.
+    2. **Pre-run probe** : on exécute le moteur en sourdine pour découvrir
+       les champs obligatoires dont la colonne source n'est pas reconnue,
+       AVANT que l'utilisateur clique Appliquer. Cela montre les cartes de
+       mapping manuel là où l'utilisateur s'y attend (comme sur Véhicules),
+       au lieu de les surgir après coup.
+    3. Bouton "Appliquer les règles Contract".
+    4. Résultats (df, anomalies, orphelins).
+    5. Cartes de mapping pour champs encore non résolus après Appliquer.
+
+    ``engine_files`` est populé par l'uploader partagé. Les slugs inconnus
+    du moteur Contract sont ignorés silencieusement.
+    """
     st.caption(
         "Applique les règles de `src/rules/contract.yml` et produit un CSV "
         "contrats prêt pour Revio, clé primaire **(plaque, numéro de contrat)**. "
@@ -2359,9 +2394,6 @@ def _render_contract_tab_body(engine_files: dict) -> None:
         st.warning("contract.yml introuvable — le moteur Contract n'est pas encore configuré.")
         return
 
-    # --- Run ---
-    st.markdown("#### Lancer le moteur Contrats")
-
     # Carry VP info from the Vehicle result (if any) so isHT post-pass can
     # reference the canonical VP classification computed earlier.
     vehicle_vp_by_plate = _extract_vp_from_vehicle_result(st.session_state.get("engine_result"))
@@ -2371,34 +2403,68 @@ def _render_contract_tab_body(engine_files: dict) -> None:
             f"VP / {sum(1 for v in vehicle_vp_by_plate.values() if not v)} non-VP."
         )
 
+    source_dfs = _build_contract_source_dfs(engine_files)
+    overrides: dict[tuple[str, str], str] = dict(
+        st.session_state.contract_unknown_resolved
+    )
+
+    # --- Pre-run probe: find unresolved mandatory fields BEFORE the run ---
+    # Runs the engine silently with current overrides so we can render the
+    # "Colonnes non identifiées" cards upfront. Kept in a try/except so a
+    # probe failure never blocks the Appliquer button.
+    probe_result = None
+    probe_error = None
+    if source_dfs:
+        try:
+            probe_result = ce.run_contract(
+                source_dfs=source_dfs,
+                manual_column_overrides=overrides or None,
+                vehicle_vp_by_plate=vehicle_vp_by_plate,
+            )
+        except Exception as _probe_err:
+            probe_error = str(_probe_err)
+
+    probe_unknowns = (
+        probe_result.unknown_column_requests if probe_result is not None else []
+    )
+    probe_issues = probe_result.issues if probe_result is not None else []
+
+    # Surface plate-only-mode warning (from probe) so the user sees it
+    # upfront rather than after Appliquer.
+    plate_only_warnings = [
+        i for i in probe_issues
+        if getattr(i, "source", "") == "__engine__" and "plaque seule" in (getattr(i, "warning", "") or "")
+    ]
+    if plate_only_warnings:
+        st.warning(
+            "🔑 " + plate_only_warnings[0].warning
+        )
+
+    if probe_unknowns:
+        st.markdown("#### 🧩 Mapping manuel — champs obligatoires non reconnus")
+        st.caption(
+            "Avant de lancer le moteur, mappe les colonnes sources pour chaque "
+            "champ ci-dessous. Ce mapping est **mémorisé** (GitHub) : les prochains "
+            "imports du même format seront auto-résolus. Tu peux aussi lancer le "
+            "moteur directement — les champs non mappés resteront vides dans le "
+            "résultat."
+        )
+        _render_contract_unknown_columns_ui(probe_unknowns, engine_files)
+
+    # --- Run ---
+    st.markdown("#### Lancer le moteur Contrats")
+
     if st.button("▶️ Appliquer les règles Contract", type="primary",
                  use_container_width=True, key="engine_run_contract_btn"):
-        # Build source_dfs keyed by slug (concat files of same slug). The
-        # Contract engine ignores slugs it doesn't understand, so it's safe
-        # to pass the full shared engine_files here.
-        source_dfs: dict = {}
-        for key, info in engine_files.items():
-            slug = info.get("slug")
-            if not slug:
-                continue
-            df = info.get("df")
-            if df is None or df.empty:
-                continue
-            if slug in source_dfs:
-                source_dfs[slug] = pd.concat([source_dfs[slug], df], ignore_index=True, sort=False)
-            else:
-                source_dfs[slug] = df.copy()
-
-        # Apply user-resolved unknown columns (register_learned_column + overrides)
-        overrides: dict[tuple[str, str], str] = {}
-        for (src_slug, field_name), col in st.session_state.contract_unknown_resolved.items():
-            overrides[(src_slug, field_name)] = col
-
+        # Re-read overrides (user may have resolved more cards in this render).
+        overrides_now: dict[tuple[str, str], str] = dict(
+            st.session_state.contract_unknown_resolved
+        )
         try:
             with st.spinner("Application des règles Contract..."):
                 result = ce.run_contract(
                     source_dfs=source_dfs,
-                    manual_column_overrides=overrides or None,
+                    manual_column_overrides=overrides_now or None,
                     vehicle_vp_by_plate=vehicle_vp_by_plate,
                 )
             st.session_state.contract_result = result
@@ -2408,6 +2474,8 @@ def _render_contract_tab_body(engine_files: dict) -> None:
 
     result = st.session_state.get("contract_result")
     if result is None:
+        if probe_error:
+            st.error(f"Erreur probe Contract : {probe_error}")
         return
 
     # --- Results ---
@@ -2444,9 +2512,10 @@ def _render_contract_tab_body(engine_files: dict) -> None:
         )
         st.dataframe(result.orphan_df, use_container_width=True)
 
-    # --- Unknown columns UI (Jalon 4.1.7) ---
-    if result.unknown_column_requests:
-        _render_contract_unknown_columns_ui(result.unknown_column_requests, engine_files)
+    # NB: the post-run "Colonnes non identifiées" section that used to live
+    # here was removed in Jalon 4.2.5 — the pre-run probe above already
+    # renders the cards and re-runs on every render, so any field still
+    # unresolved after Appliquer is visible up top.
 
 
 def _extract_vp_from_vehicle_result(vehicle_result) -> dict[str, bool]:
