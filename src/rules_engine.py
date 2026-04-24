@@ -68,6 +68,12 @@ class EngineResult:
     rules_yaml: Optional[dict] = None
     # v11: full provenance store (prereq Jalon 5.0 assistant).
     lineage: Optional[LineageStore] = None
+    # Jalon 2.7 value-mapping cache — populated by apply_rules when the enum
+    # normalization path is wired. Kept as empty dicts by default so the
+    # normalization UI + AI fallback in app.py degrade gracefully to no-op
+    # rather than crash with AttributeError.
+    unresolved_enums: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    value_mapping_hits: dict[tuple[str, str], tuple[str, str, str]] = field(default_factory=dict)
 
 
 # ---------- YAML loading ----------
