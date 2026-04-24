@@ -23,6 +23,7 @@ except ImportError:
 
 from src.detectors import detect, label_for, SOURCE_TYPE_LABELS
 from src.llm_mapper import propose_mapping
+from src.chat_assistant import chat_turn as _chat_turn
 from src.pipeline import (
     SourceFile,
     load_tabular,
@@ -541,6 +542,8 @@ NAV_ITEMS = [
     ("normal",   "🧭",   "Normalisation"),
     # Jalon 4.3.1 — audit/édition globale des mappings mémorisés
     ("mappings", "🗂️",   "Mappings mémorisés"),
+    # Jalon 5.0.1 — assistant LLM (AM mode) : Q&A sur l'import en cours
+    ("assistant", "🤖",  "Assistant"),
 ]
 
 with st.sidebar:
@@ -3610,6 +3613,169 @@ def render_mappings_audit_page() -> None:
             _render_audit_table_sidebar(slug)
 
 
+# ========== Jalon 5.0.1 — Assistant LLM (AM mode) =============================
+# Chat conversationnel avec Claude pour que l'AM puisse poser des questions en
+# langage naturel sur l'import en cours :
+#   · "Pourquoi ce véhicule a brand = Peugeot ?"
+#   · "Quels sont les warnings côté contrats ?"
+#   · "Pourquoi le moteur n'a pas pris la valeur d'Arval pour cette plaque ?"
+#
+# L'assistant est READ-ONLY : 2 tools get_session_state + get_lineage. Les
+# modifications de règles (patch YAML + commit GitHub) arrivent en 5.0.2.
+# ==============================================================================
+
+
+def _build_chat_session_ctx() -> dict:
+    """Snapshot de l'état Streamlit pour le tool dispatcher du chat.
+
+    On passe un DICT (pas le session_state directement) pour garder
+    `src/chat_assistant.py` pur (pas d'import streamlit).
+    """
+    return {
+        "current_mode": st.session_state.get("mode"),
+        "engine_files": st.session_state.get("engine_files") or {},
+        "engine_overrides": st.session_state.get("engine_overrides") or {},
+        "engine_result": st.session_state.get("engine_result"),
+        "contract_result": st.session_state.get("contract_result"),
+        "client_name": st.session_state.get("client_name") or "",
+        "user_instructions": st.session_state.get("user_instructions") or "",
+    }
+
+
+def _resolve_anthropic_api_key() -> str | None:
+    """Même résolution de clé que `propose_mapping` : env > secrets > manual."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if key:
+        return key
+    try:
+        key = st.secrets.get("ANTHROPIC_API_KEY")  # type: ignore[attr-defined]
+    except Exception:
+        key = None
+    if key:
+        return key
+    # Fallback on the manual-entry we stash in session state from the sidebar.
+    return st.session_state.get("_manual_anthropic_key")
+
+
+_CHAT_STARTER_QUESTIONS = [
+    "Résume ce que j'ai chargé dans cette session.",
+    "Quels sont les warnings côté Vehicle ?",
+    "Pourquoi ce véhicule a cette valeur ?",
+    "C'est quoi la différence entre les slugs ayvens_etat_parc et ayvens_aen ?",
+]
+
+
+def render_chat_page() -> None:
+    """Jalon 5.0.1 — Page 'Assistant' : chat Q&A sur la session d'import."""
+    st.title("🤖 Assistant")
+    st.caption(
+        "Pose tes questions en langage naturel sur l'import en cours. "
+        "L'assistant a accès en **lecture seule** à la lineage du moteur de "
+        "règles et peut t'expliquer d'où vient chaque valeur, quels "
+        "candidats ont été écartés, et pourquoi. Les modifications de règles "
+        "(Jalon 5.0.2) et le bouton Signaler (Jalon 5.0.3) arrivent ensuite."
+    )
+
+    # --- Clé API check --------------------------------------------------------
+    api_key = _resolve_anthropic_api_key()
+    if not api_key:
+        st.error(
+            "❌ Clé Anthropic introuvable. Renseigne-la dans la sidebar "
+            "(bloc 🔑 API Key) ou configure `ANTHROPIC_API_KEY` côté "
+            "secrets Streamlit."
+        )
+        return
+
+    # --- Session bootstrap ----------------------------------------------------
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "chat_pending_prompt" not in st.session_state:
+        st.session_state.chat_pending_prompt = None
+
+    # --- Toolbar (reset / starters) ------------------------------------------
+    tc1, tc2 = st.columns([5, 1])
+    with tc1:
+        if not st.session_state.chat_messages:
+            st.caption("💡 Questions pour démarrer :")
+            sc = st.columns(len(_CHAT_STARTER_QUESTIONS))
+            for i, q in enumerate(_CHAT_STARTER_QUESTIONS):
+                with sc[i]:
+                    if st.button(
+                        q, key=f"chat_starter_{i}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.chat_pending_prompt = q
+                        st.rerun()
+    with tc2:
+        if st.session_state.chat_messages:
+            if st.button(
+                "🧹 Reset", key="chat_reset",
+                use_container_width=True,
+                help="Efface la conversation. La session d'import reste intacte.",
+            ):
+                st.session_state.chat_messages = []
+                st.session_state.chat_pending_prompt = None
+                st.rerun()
+
+    # --- Render conversation history -----------------------------------------
+    for msg in st.session_state.chat_messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            # Show any tool-use debug info in an expander (collapsed by default)
+            if msg.get("tool_uses"):
+                with st.expander(
+                    f"🔧 {len(msg['tool_uses'])} appel(s) d'outil", expanded=False
+                ):
+                    for name, tool_input in msg["tool_uses"]:
+                        st.caption(f"**{name}** — `{tool_input}`")
+
+    # --- Chat input + dispatch ------------------------------------------------
+    # Consume a pending starter prompt if any (set when user clicks a button).
+    pending = st.session_state.chat_pending_prompt
+    user_prompt = st.chat_input(
+        "Pose ta question… (ex: pourquoi AB-123-CD a brand = Peugeot ?)"
+    )
+    effective_prompt = pending or user_prompt
+
+    if effective_prompt:
+        st.session_state.chat_pending_prompt = None
+        # Append user message & render immediately
+        st.session_state.chat_messages.append({
+            "role": "user", "content": effective_prompt,
+        })
+        with st.chat_message("user"):
+            st.markdown(effective_prompt)
+        # Call Claude
+        with st.chat_message("assistant"):
+            with st.spinner("Claude analyse l'import…"):
+                result = _chat_turn(
+                    ui_messages=st.session_state.chat_messages,
+                    session_ctx=_build_chat_session_ctx(),
+                    api_key=api_key,
+                )
+            if "error" in result:
+                st.error(result["error"])
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": f"❌ {result['error']}",
+                    "tool_uses": result.get("tool_uses", []),
+                })
+            else:
+                st.markdown(result["text"])
+                if result.get("tool_uses"):
+                    with st.expander(
+                        f"🔧 {len(result['tool_uses'])} appel(s) d'outil",
+                        expanded=False,
+                    ):
+                        for name, tool_input in result["tool_uses"]:
+                            st.caption(f"**{name}** — `{tool_input}`")
+                st.session_state.chat_messages.append({
+                    "role": "assistant",
+                    "content": result["text"],
+                    "tool_uses": result.get("tool_uses", []),
+                })
+
+
 def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> None:
     """Mapping UI for Contract tab — parité Vehicle (Jalon 4.2.7).
 
@@ -4487,6 +4653,9 @@ elif st.session_state.mode == "normal":
 
 elif st.session_state.mode == "mappings":
     render_mappings_audit_page()
+
+elif st.session_state.mode == "assistant":
+    render_chat_page()
 
 # ========== Classic mode: horizontal stepper above step content ==========
 elif st.session_state.mode == "classic":
