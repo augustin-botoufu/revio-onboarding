@@ -501,13 +501,21 @@ def _postpass_isHT(
     lineage: LineageStore,
     vehicle_vp_by_plate: dict[str, bool],
     vp_from_ep_by_key: dict[str, tuple[bool, str]],
+    vp_from_api_by_key: Optional[dict[str, tuple[bool, str]]] = None,
 ) -> None:
     """Resolve isHT: VP → FALSE (TTC) ; non-VP → TRUE (HT).
 
-    Priority per key:
+    Priority per key (Jalon 4.2.10) :
       1. VP from the EP file where totalPrice came from (if known)
-      2. VP from API plaques (via vehicle table)
+      2. VP from api_plaques source (read directly by the Contract engine)
+      3. VP from vehicle_vp_by_plate (Vehicle engine result, fallback)
+
+    The key addition in 4.2.10 is step 2 : on lit désormais ``api_plaques``
+    depuis le moteur Contract lui-même (via ``_extract_vp_from_api_plaques``).
+    Résultat : isHT se remplit même si l'utilisateur n'a pas cliqué
+    Appliquer sur l'onglet Véhicules avant l'onglet Contrats.
     """
+    vp_from_api_by_key = vp_from_api_by_key or {}
     if "isHT" not in out_df.columns:
         return
     for key in out_df.index:
@@ -516,10 +524,13 @@ def _postpass_isHT(
         plate, _ = split_key(key)
         is_vp: Optional[bool] = None
         chosen_source = None
-        # 1. EP
+        # 1. EP loueur
         if key in vp_from_ep_by_key:
             is_vp, chosen_source = vp_from_ep_by_key[key]
-        # 2. API plaques (via vehicle table)
+        # 2. api_plaques directement (ne dépend pas du run Vehicle)
+        if is_vp is None and key in vp_from_api_by_key:
+            is_vp, chosen_source = vp_from_api_by_key[key]
+        # 3. Fallback Vehicle engine result (si run dans la même session)
         if is_vp is None and plate in vehicle_vp_by_plate:
             is_vp = vehicle_vp_by_plate[plate]
             chosen_source = "api_plaque"
@@ -542,6 +553,47 @@ def _postpass_isHT(
 
 
 # ---------- Main API ----------
+
+
+def _extract_vp_from_api_plaques(
+    indexed: dict[str, pd.DataFrame],
+) -> dict[str, tuple[bool, str]]:
+    """Scan the ``api_plaques`` source for the SIV genre code.
+
+    (Jalon 4.2.10) Avant, isHT ne pouvait être rempli que si (a) un EP
+    loueur avait une colonne VP/VU reconnue OU (b) le moteur Véhicules
+    avait été lancé dans la session ET que ``engine_result.df.usage``
+    était populé. En pratique l'EP loueur ne couvre pas toutes les
+    plaques et ``engine_result`` se fait invalider dès qu'un fichier
+    est re-uploadé → 52/54 cellules isHT restaient vides.
+
+    Le fichier ``api_plaques`` (SIV officiel) couvre toutes les plaques
+    du parc par construction — on peut l'exploiter directement, sans
+    dépendance sur l'ordre des onglets.
+
+    Returns dict: key → (is_vp_bool, 'api_plaque').
+    """
+    out: dict[str, tuple[bool, str]] = {}
+    df = indexed.get("api_plaques")
+    if df is None or df.empty:
+        return out
+    # Column candidates, ordered by specificity.
+    col_candidates = ["genreVCGNGC", "genre", "genreCG", "genre_cg",
+                      "genre_cgi", "categorie", "catégorie"]
+    col = _find_column(df, col_candidates)
+    if col is None:
+        return out
+    for key, val in df[col].items():
+        if key in out or _is_null(val):
+            continue
+        low = str(val).strip().lower()
+        # Codes SIV stricts + variantes libellé.
+        if any(h in low for h in ("vp", "particul", "tourisme")):
+            out[key] = (True, "api_plaque")
+        elif any(h in low for h in ("vu", "utilit", "commercial",
+                                     "camion", "fourgon", "ctte", "pl")):
+            out[key] = (False, "api_plaque")
+    return out
 
 
 def _extract_vp_from_ep_sources(
@@ -751,7 +803,11 @@ def apply_rules(
 
     # Post-passes
     vp_from_ep = _extract_vp_from_ep_sources(indexed)
-    _postpass_isHT(out_df, source_by_cell, lineage, vehicle_vp_by_plate, vp_from_ep)
+    vp_from_api = _extract_vp_from_api_plaques(indexed)
+    _postpass_isHT(
+        out_df, source_by_cell, lineage,
+        vehicle_vp_by_plate, vp_from_ep, vp_from_api,
+    )
     _postpass_compute_months(out_df, source_by_cell, lineage)
 
     out_df.index.name = "contract_key"

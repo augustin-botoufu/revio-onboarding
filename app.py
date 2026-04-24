@@ -1751,6 +1751,62 @@ def _render_engine_uploader() -> None:
     _patterns = lp.load_patterns()
     _learned_hits: list[str] = []
 
+    # Jalon 4.3.0 — Pre-load learned column mappings from learned_columns.yml
+    # (written by the Contract-tab "Mémoriser ce format" flow). Until 4.3.0 the
+    # file was only written and never re-read, so the "colonne non identifiée"
+    # cards reappeared at every session. We flatten the patterns into
+    # {slug: {field: source_col}} here and apply them to ``engine_overrides``
+    # below as each file's slug is determined. Both engines (Vehicle + Contract)
+    # pick these up at run time through the shared ``engine_overrides`` dict.
+    #
+    # Precedence: Vehicle pattern matcher (file-signature specific, set later
+    # in the loop) WINS over learned_columns.yml (slug-wide). We guard the
+    # write with ``not in engine_overrides`` below.
+    _learned_columns_path = (
+        Path(__file__).parent / "src" / "rules" / "learned_columns.yml"
+    )
+    _learned_cols_by_slug: dict[str, dict[str, str]] = {}
+    try:
+        _lc_data = unkcol.load_learned_patterns(_learned_columns_path)
+        for _table_name in ("vehicle", "contract"):
+            _table_node = (
+                _lc_data.get("patterns", {}).get(_table_name, {}) or {}
+            )
+            for _slug_key, _fields_node in _table_node.items():
+                _slug_out = _learned_cols_by_slug.setdefault(_slug_key, {})
+                for _field_name, _entry in (_fields_node or {}).items():
+                    _col = (
+                        _entry.get("column") if isinstance(_entry, dict) else None
+                    )
+                    if _col and _field_name not in _slug_out:
+                        _slug_out[_field_name] = _col
+    except Exception:
+        # Never block the upload if learned_columns.yml is malformed/absent.
+        _learned_cols_by_slug = {}
+    _learned_columns_hits: list[str] = []
+
+    def _apply_learned_columns(key: str, slug: str, df) -> int:
+        """Inject slug-level learned column mappings into engine_overrides.
+
+        Returns the number of (field → source_col) overrides applied.
+        Only writes a cell that is still empty — Vehicle pattern matches
+        (more specific) win if they filled the cell first.
+        """
+        learned_cols = _learned_cols_by_slug.get(slug, {})
+        if not learned_cols:
+            return 0
+        valid_cols = {str(c) for c in df.columns}
+        applied = 0
+        for _field_name, _src_col in learned_cols.items():
+            if not _src_col or _src_col not in valid_cols:
+                continue
+            _ov_key = (key, _field_name)
+            if _ov_key in st.session_state.engine_overrides:
+                continue
+            st.session_state.engine_overrides[_ov_key] = _src_col
+            applied += 1
+        return applied
+
     for up in uploaded:
         filename = getattr(up, "name", "uploaded")
         lower = filename.lower()
@@ -1783,6 +1839,12 @@ def _render_engine_uploader() -> None:
                 continue
             slug = f"{lessor_hint or 'arval'}_facture_pdf"
             key = filename
+            # Jalon 4.3.0 — apply learned column mappings (slug-wide) to PDFs too.
+            _lc_applied_pdf = _apply_learned_columns(key, slug, df)
+            if _lc_applied_pdf:
+                _learned_columns_hits.append(
+                    f"{filename} → {_lc_applied_pdf} champ(s)"
+                )
             new_files[key] = {
                 "df": df,
                 "filename": filename,
@@ -1793,7 +1855,7 @@ def _render_engine_uploader() -> None:
                 "is_pdf": True,
                 "learned_match_id": None,
                 "learned_match_hint": None,
-                "learned_mapping_applied_count": 0,
+                "learned_mapping_applied_count": _lc_applied_pdf,
             }
             continue
 
@@ -1826,6 +1888,15 @@ def _render_engine_uploader() -> None:
                         st.session_state.engine_overrides[(key, field_name)] = src_col
                         mapping_applied_count += 1
 
+            # Jalon 4.3.0 — apply learned_columns.yml (slug-wide) mappings on
+            # top of the Vehicle pattern match. ``_apply_learned_columns``
+            # never overwrites cells already set by the pattern match above.
+            lc_applied = _apply_learned_columns(key, default_slug, df)
+            mapping_applied_count += lc_applied
+            if lc_applied:
+                label = filename + (f" [{sheet_name}]" if sheet_name else "")
+                _learned_columns_hits.append(f"{label} → {lc_applied} champ(s)")
+
             new_files[key] = {
                 "df": df,
                 "filename": filename,
@@ -1848,6 +1919,13 @@ def _render_engine_uploader() -> None:
         st.info(
             "🧠 **Format reconnu depuis la mémoire** — "
             + " · ".join(_learned_hits)
+        )
+    if _learned_columns_hits:
+        # Jalon 4.3.0 — separate banner: signature-match and slug-wide mapping
+        # are two distinct mechanisms, worth distinguishing for debugging.
+        st.info(
+            "🗂️ **Mappings mémorisés réappliqués** (learned_columns.yml) — "
+            + " · ".join(_learned_columns_hits)
         )
 
 
