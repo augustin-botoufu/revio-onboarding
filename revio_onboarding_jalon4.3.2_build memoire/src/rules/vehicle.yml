@@ -1,0 +1,606 @@
+schema: vehicle
+version: 2
+description: Règles de mapping Vehicle — source de vérité pour le moteur. Généré depuis build_spec_vehicle.py. Voir aussi
+  spec_vehicle_v2.xlsx.
+fields:
+  registrationPlate:
+    mandatory: true
+    description: Plaque d'immatriculation
+    format_hint: AB-123-CD
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: normalize_plate
+      transform_doc: Normaliser format (tirets)
+      example: AB-123-CD
+      note: 'Vérité terrain : le client connaît ses propres plaques'
+    - priority: 2
+      source: api_plaques
+      source_label: API Plaques
+      column: immatriculation
+      transform: normalize_plate
+      transform_doc: 'Normaliser format: mettre des tirets AB-123-CD'
+      example: AB-123-CD
+      note: Contrôle SIV
+    - priority: 3
+      source: assurance_externe
+      source_label: Assurance externe
+      transform: normalize_plate
+      transform_doc: Normaliser
+      note: À compléter dès réception d'un sample
+    - priority: 4
+      source: arval_aen
+      source_label: Arval - AEN
+      column: immat
+      transform: normalize_plate
+      transform_doc: Normaliser
+      example: AB-123-CD
+      note: Ex-æquo loueur. Pour rapprochement
+    - priority: 4
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Plaque d'immatriculation
+      transform: normalize_plate
+      transform_doc: Normaliser format (tirets)
+      example: AB-123-CD
+      note: Ex-æquo loueur
+    - priority: 4
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: normalize_plate
+      transform_doc: Normaliser format (tirets)
+      note: Ex-æquo loueur. À compléter dès réception d'un sample
+    - priority: 4
+      source: ayvens_aen
+      source_label: Ayvens - AEN
+      column: immatriculation
+      transform: normalize_plate
+      transform_doc: Normaliser
+      example: AB-123-CD
+      note: Ex-æquo loueur. Pour rapprochement si seul AEN dispo
+    - priority: 4
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: N° Immat
+      transform: normalize_plate
+      transform_doc: Normaliser format (tirets)
+      example: AB123CD
+      note: Ex-æquo loueur
+  usage:
+    mandatory: true
+    description: Usage du véhicule
+    allowed_values:
+    - utility
+    - service
+    - private
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: genreVCGNGC
+      transform: map_siv_usage
+      transform_doc: 'Mapper codes SIV : VP→private, VU→utility, autres→service'
+      example: VP
+      note: Source fiscale officielle
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      transform: map_loueur_usage
+      transform_doc: Mapper libellés loueur → utility/service/private
+      note: Ex-æquo loueur. À compléter
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: map_loueur_usage
+      transform_doc: Mapper libellés loueur → utility/service/private
+      note: Ex-æquo loueur. À compléter
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: Genre
+      transform: map_loueur_usage
+      transform_doc: Mapper libellés loueur → utility/service/private
+      example: service
+      note: Ex-æquo loueur
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: map_client_usage
+      transform_doc: Mapper libellés client → utility/service/private
+      example: service
+      note: Déclaratif client
+  parcEntryAt:
+    mandatory: false
+    description: Date d'entrée dans le parc du client
+    format_hint: YYYY/MM/DD
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Date de début de contrat
+      transform: normalize_date
+      transform_doc: Parser JJ/MM/AAAA → YYYY/MM/DD
+      example: 15/03/2024
+      note: Ex-æquo loueur
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: normalize_date
+      transform_doc: Format YYYY/MM/DD
+      note: Ex-æquo loueur. À compléter
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: Date début contrat
+      transform: normalize_date
+      transform_doc: Format YYYY/MM/DD
+      example: '2024-03-15'
+      note: Ex-æquo loueur. Date contrat = entrée parc
+    - priority: 2
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: normalize_date
+      transform_doc: Format YYYY/MM/DD
+      example: 15/03/2024
+      note: Si client fournit explicitement la date
+  brand:
+    mandatory: false
+    description: Marque du véhicule
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: marque
+      transform: uppercase
+      transform_doc: Uppercase
+      example: RENAULT
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Marque
+      transform: uppercase
+      transform_doc: Uppercase
+      example: RENAULT
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: uppercase
+      transform_doc: Uppercase
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: Marque
+      transform: uppercase
+      transform_doc: Uppercase
+      example: Renault
+      note: Ex-æquo loueur
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: uppercase
+      transform_doc: Uppercase
+      example: Renault
+      note: Fallback
+  model:
+    mandatory: false
+    description: 'Modèle (ex: CLIO, 208)'
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: modele
+      transform: uppercase
+      transform_doc: Uppercase
+      example: CLIO
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Modèle
+      transform: uppercase
+      transform_doc: Uppercase
+      example: CLIO
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: uppercase
+      transform_doc: Uppercase
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: Gamme
+      transform: uppercase
+      transform_doc: Uppercase; attention 'Gamme' vs 'Version'
+      example: CLIO
+      note: Ex-æquo loueur. Ne pas prendre 'Référence' (codes internes)
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: uppercase
+      transform_doc: Uppercase
+      example: CLIO
+      note: Fallback
+  variant:
+    mandatory: false
+    description: 'Version / finition (ex: Intens, GT Line)'
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: version
+      transform: title_case
+      transform_doc: Title case
+      example: Intens
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Version
+      transform: title_case
+      example: Intens
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: title_case
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: Version
+      transform: title_case
+      example: Intens TCe 90
+      note: Ex-æquo loueur. Concatène souvent motorisation; à nettoyer
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: title_case
+      example: Intens
+      note: Fallback
+  motorisation:
+    mandatory: false
+    description: Type de motorisation
+    allowed_values:
+    - diesel
+    - gas
+    - hybrid
+    - electric
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: energieNGC
+      transform: map_siv_motorisation
+      transform_doc: 'Map codes SIV: GO→diesel, ES→gas, EL→electric, EH/ES+HY→hybrid'
+      example: GO
+      note: Codes officiels SIV (colonne `energieNGC` de l'API Plaques)
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Carburant
+      transform: map_loueur_motorisation
+      transform_doc: 'Map: Diesel→diesel, Essence→gas, Hybride→hybrid, Electrique→electric'
+      example: Diesel
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: map_loueur_motorisation
+      transform_doc: Map à confirmer selon libellés
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: Energie
+      transform: map_loueur_motorisation
+      transform_doc: 'Map: Gazole→diesel, Essence→gas, Hybride→hybrid, Électrique→electric, Hybride rechargeable→hybrid'
+      example: Gazole
+      note: Ex-æquo loueur
+    - priority: 3
+      source: ayvens_tvs
+      source_label: Ayvens - TVS
+      column: Energie
+      transform: map_loueur_motorisation
+      transform_doc: Map identique état de parc
+      note: Redondant avec état de parc
+    - priority: 4
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: map_loueur_motorisation
+      transform_doc: Map libellés libres → diesel/gas/hybrid/electric (prompt utilisateur si ambigu)
+      example: Diesel
+      note: Fallback
+  electricAutonomy:
+    mandatory: false
+    description: Autonomie électrique (VE / PHEV)
+    format_hint: km, entier
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      transform: to_int
+      transform_doc: Entier, km
+      note: À vérifier avec échantillon API
+    - priority: 2
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: to_int
+      transform_doc: Entier, km
+      note: Fallback, rare
+  electricEnginePower:
+    mandatory: false
+    description: Puissance moteur électrique (VE / PHEV)
+    format_hint: kW, entier
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: puissance_nette_max
+      transform: to_int
+      transform_doc: Entier, kW
+      example: '100'
+      note: Attention unité (kW vs CV)
+    - priority: 2
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: to_int
+      transform_doc: Entier, kW
+      note: Fallback
+  weight:
+    mandatory: false
+    description: Masse du véhicule
+    format_hint: kg, entier
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: poids
+      transform: to_int
+      transform_doc: Entier, kg
+      example: '1200'
+      note: Masse à vide en ordre de marche (colonne `poids` de l'API Plaques)
+    - priority: 2
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: to_int
+      transform_doc: Entier, kg
+      note: Fallback
+  co2gKm:
+    mandatory: false
+    description: Emissions CO2
+    format_hint: g/km, entier
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: co2
+      transform: to_int
+      transform_doc: Entier, g/km
+      example: '105'
+      note: Valeur WLTP si dispo, sinon NEDC
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: CO2
+      transform: to_int
+      transform_doc: Entier, g/km
+      example: '105'
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: to_int
+      transform_doc: Entier, g/km
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: CO² (g/km)
+      transform: to_int
+      transform_doc: Entier, g/km
+      example: '105'
+      note: Ex-æquo loueur. État de parc = toutes les plaques
+    - priority: 3
+      source: arval_tvu
+      source_label: Arval - TVS (TVU)
+      column: CO2
+      transform: to_int
+      transform_doc: Entier, g/km
+      example: '105'
+      note: Ex-æquo fiscal
+    - priority: 3
+      source: autre_loueur_tvs
+      source_label: TVS autre loueur
+      transform: to_int
+      transform_doc: Entier, g/km
+      note: Ex-æquo fiscal
+    - priority: 3
+      source: ayvens_tvs
+      source_label: Ayvens - TVS
+      column: CO2
+      transform: to_int
+      transform_doc: Entier, g/km
+      example: '105'
+      note: Ex-æquo fiscal
+    - priority: 4
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: to_int
+      transform_doc: Entier, g/km
+      example: '105'
+      note: Fallback
+  registrationIssueCountryCode:
+    mandatory: true
+    description: Pays d'immatriculation
+    format_hint: ISO 2 lettres (FR, BE, LU...)
+    rules:
+    - priority: 1
+      source: __default__
+      source_label: Valeur par défaut
+      column: FR
+      transform: normalize_country_code
+      transform_doc: Code ISO 2 lettres
+      example: FR
+      note: Par défaut FR; override si véhicule étranger (rare)
+    - priority: 2
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: normalize_country_code
+      transform_doc: Code ISO 2 lettres
+      example: FR
+      note: Override si client liste explicitement le pays
+  registrationIssueDate:
+    mandatory: false
+    description: Date de 1ère mise en circulation
+    format_hint: YYYY/MM/DD
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: date_premiere_circulation
+      transform: normalize_date
+      transform_doc: Format YYYY/MM/DD
+      example: '2024-03-15'
+      note: Date officielle SIV
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: Date 1ère mise en circulation
+      transform: normalize_date
+      transform_doc: Parser JJ/MM/AAAA → YYYY/MM/DD
+      example: 15/03/2024
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: normalize_date
+      transform_doc: Format YYYY/MM/DD
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: 1ère MEC
+      transform: normalize_date
+      transform_doc: Parser JJ/MM/AAAA → YYYY/MM/DD
+      example: 15/03/2024
+      note: Ex-æquo loueur
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: normalize_date
+      transform_doc: Parser → YYYY/MM/DD
+      example: 15/03/2024
+      note: Fallback
+  registrationVin:
+    mandatory: false
+    description: Numéro VIN
+    format_hint: 17 caractères
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: vin
+      transform: normalize_vin
+      transform_doc: Uppercase, 17 chars, retirer espaces
+      example: VF1BR0F0566123456
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: VIN
+      transform: normalize_vin
+      transform_doc: Uppercase, 17 chars
+      example: VF1BR0F0566123456
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: normalize_vin
+      transform_doc: Uppercase, 17 chars
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: N° de chassis
+      transform: normalize_vin
+      transform_doc: Uppercase, 17 chars
+      example: VF1BR0F0566123456
+      note: Ex-æquo loueur
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: normalize_vin
+      transform_doc: Uppercase, 17 chars
+      example: VF1BR0F0566123456
+      note: Fallback
+  registrationFiscalPower:
+    mandatory: false
+    description: Puissance fiscale (CV)
+    format_hint: entier
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: puisFisc
+      transform: to_int
+      transform_doc: Entier
+      example: '5'
+      note: Colonne `puisFisc` de l'API Plaques
+    - priority: 2
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column: CV fiscaux
+      transform: to_int
+      transform_doc: Entier
+      example: '5'
+      note: Ex-æquo loueur
+    - priority: 2
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: to_int
+      transform_doc: Entier
+      note: Ex-æquo loueur
+    - priority: 2
+      source: ayvens_etat_parc
+      source_label: Ayvens - État de parc
+      column: CV Fisc.
+      transform: to_int
+      transform_doc: Entier
+      example: '5'
+      note: Ex-æquo loueur
+    - priority: 3
+      source: client_file
+      source_label: Fichier véhicules client (interne)
+      column_hint: à mapper manuellement (fallback IA)
+      transform: to_int
+      transform_doc: Entier
+      example: '5'
+      note: Fallback
+  imageUrl:
+    mandatory: false
+    description: URL de la photo du véhicule
+    rules:
+    - priority: 1
+      source: api_plaques
+      source_label: API Plaques
+      column: photo_modele
+      transform: passthrough
+      transform_doc: URL directe
+      example: https://api.plaques/photos/xxx.jpg
+      note: 'Nouveauté : API Plaques expose une URL photo exploitable'
