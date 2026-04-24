@@ -571,28 +571,90 @@ def _extract_vp_from_api_plaques(
     du parc par construction — on peut l'exploiter directement, sans
     dépendance sur l'ordre des onglets.
 
+    (Jalon 5.0.1.2) Avant ce fix, la sélection de colonne passait par
+    ``_find_column`` avec des candidates en MixedCase ("genreVCGNGC")
+    comparés à des ``col.lower()`` → aucun match sur le nom spécifique.
+    Le fallback ``"genre"`` (lowercase) attrapait alors la PREMIÈRE col
+    contenant "genre", c'est-à-dire ``genreVCG`` (code NUMÉRIQUE 1/3/…),
+    pas ``genreVCGNGC`` (libellé texte "VP"/"VASP"/…). Résultat : 0
+    plaque résolue → ``isHT`` vide. Fix : (1) match exact lowercase
+    sur un set de noms spécifiques d'abord, (2) fallback sniff des
+    valeurs — on prend la col dont ≥20% des cellules contiennent un
+    indicateur textuel VP/VU.
+
     Returns dict: key → (is_vp_bool, 'api_plaque').
     """
     out: dict[str, tuple[bool, str]] = {}
     df = indexed.get("api_plaques")
     if df is None or df.empty:
         return out
-    # Column candidates, ordered by specificity.
-    col_candidates = ["genreVCGNGC", "genre", "genreCG", "genre_cg",
-                      "genre_cgi", "categorie", "catégorie"]
-    col = _find_column(df, col_candidates)
+
+    # ---- Step 1 : exact match (lowercase) on a prioritized name list ----
+    # Ordered by specificity : genreVCGNGC > genreCGNGC > genreCG > genre.
+    name_priority = (
+        "genrevcgngc",       # texte libellé ("VP"/"VASP"/"VU"…) ← le bon
+        "genrecgngc",
+        "genre_vcg_ngc",
+        "genrevcg_ngc",
+        "genrecg",
+        "genre_cg",
+        "categorie",
+        "catégorie",
+        "genre",              # dernier recours — peut être le code numérique
+    )
+    low_to_col = {str(c).strip().lower(): c for c in df.columns}
+    col: Optional[str] = None
+    for cand in name_priority:
+        if cand in low_to_col:
+            col = low_to_col[cand]
+            break
+
+    # ---- Step 2 : guard against numeric-only columns (e.g. genreVCG) ----
+    # If the picked col is numeric, it's the SIV code not the label → find a
+    # text sibling. If none by name, sniff values below.
+    def _is_text_vp_column(series: pd.Series) -> bool:
+        if series.dtype.kind in ("i", "u", "f"):
+            return False
+        sample = series.dropna().head(200).astype(str)
+        if sample.empty:
+            return False
+        hits = sample.str.lower().str.contains(
+            r"\b(?:vp|vu|vasp|particul|utilit|tourisme|camion|fourgon)\b",
+            regex=True, na=False,
+        ).sum()
+        return (hits / len(sample)) >= 0.20
+
+    if col is not None and not _is_text_vp_column(df[col]):
+        col = None  # discard numeric lookalike, fall through to sniff
+
+    # ---- Step 3 : sniff — first column whose values look like VP/VU text ----
+    if col is None:
+        for c in df.columns:
+            try:
+                if _is_text_vp_column(df[c]):
+                    col = c
+                    break
+            except Exception:
+                continue
+
     if col is None:
         return out
+
+    # Codes SIV : VP = voiture particulière (→ TTC). Tout le reste (VU,
+    # VASP, CAM, CTTE, CL, PTRA, TM, TR, REMORQUE, SEMI…) = non-VP (→ HT).
+    # Sur ``api_plaques``, la col texte est un code SIV propre : on
+    # whitelist VP et on traite tout le reste comme non-VP (y compris
+    # VASP qui était le cas des 22 lignes non résolues chez Augustin).
+    VP_HINTS = ("particul", "tourisme")  # substrings textuels
+    VP_EXACT = {"vp"}                    # codes courts exacts
     for key, val in df[col].items():
         if key in out or _is_null(val):
             continue
         low = str(val).strip().lower()
-        # Codes SIV stricts + variantes libellé.
-        if any(h in low for h in ("vp", "particul", "tourisme")):
-            out[key] = (True, "api_plaque")
-        elif any(h in low for h in ("vu", "utilit", "commercial",
-                                     "camion", "fourgon", "ctte", "pl")):
-            out[key] = (False, "api_plaque")
+        if not low:
+            continue
+        is_vp = (low in VP_EXACT) or any(h in low for h in VP_HINTS)
+        out[key] = (is_vp, "api_plaque")
     return out
 
 
