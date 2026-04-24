@@ -665,6 +665,141 @@ def save_learned_columns_yaml(
     )
 
 
+# --- Branch + Pull Request (Jalon 5.0.2 — Mode Dev) ------------------------
+#
+# Mode Dev lets the user commit YAML patches to a NEW branch and open a PR
+# on main, rather than pushing straight to main like the learned_patterns
+# auto-commit does. Rationale: patches generated from a natural-language
+# prompt are riskier than learned patterns (which are built from concrete
+# user inputs), so we want a reviewable code-review step before anything
+# lands on the branch Streamlit Cloud auto-deploys from.
+
+
+def get_branch_sha(cfg: GitHubConfig, branch: Optional[str] = None) -> str:
+    """Return the commit sha at the tip of ``branch`` (defaults to cfg.branch).
+
+    Raised :class:`GitHubFileNotFound` if the branch doesn't exist — so the
+    caller can distinguish "branch missing" from a more generic error.
+    """
+    ref = branch or cfg.branch
+    url = f"{API_BASE}/repos/{cfg.repo}/git/ref/heads/{ref}"
+    payload = _http("GET", url, cfg.token)
+    obj = payload.get("object") or {}
+    sha = obj.get("sha") or ""
+    if not sha:
+        raise GitHubSyncError(
+            f"Réponse GitHub inattendue : pas de sha pour la branche `{ref}`."
+        )
+    return sha
+
+
+def create_branch(
+    cfg: GitHubConfig,
+    new_branch: str,
+    *,
+    from_sha: Optional[str] = None,
+) -> dict:
+    """Create ``new_branch`` pointing at ``from_sha`` (default: tip of cfg.branch).
+
+    If the branch already exists we return a dict with ``already_exists=True``
+    instead of raising — Mode Dev generates timestamped branch names so a
+    collision indicates the user double-clicked, not a real conflict.
+    """
+    base_sha = from_sha or get_branch_sha(cfg)
+    url = f"{API_BASE}/repos/{cfg.repo}/git/refs"
+    body = {"ref": f"refs/heads/{new_branch}", "sha": base_sha}
+    try:
+        return _http("POST", url, cfg.token, body=body)
+    except GitHubSyncError as e:
+        # 422 "Reference already exists" → soft result, not an error.
+        msg = (e.user_message or "").lower()
+        if "already exists" in msg or "reference already exists" in msg:
+            return {"already_exists": True, "ref": body["ref"]}
+        raise
+
+
+def create_pull_request(
+    cfg: GitHubConfig,
+    *,
+    head: str,
+    base: Optional[str] = None,
+    title: str,
+    body: str = "",
+    draft: bool = False,
+) -> dict:
+    """Open a PR from ``head`` to ``base`` (default: cfg.branch, usually main).
+
+    Returns the full GitHub response (includes ``html_url`` for the PR page
+    and ``number`` for the PR id, both useful for the UI).
+    """
+    base_branch = base or cfg.branch
+    url = f"{API_BASE}/repos/{cfg.repo}/pulls"
+    payload = {
+        "title": title,
+        "head": head,
+        "base": base_branch,
+        "body": body,
+        "draft": draft,
+    }
+    return _http("POST", url, cfg.token, body=payload)
+
+
+def commit_file_on_branch(
+    cfg: GitHubConfig,
+    path: str,
+    new_text: str,
+    *,
+    branch: str,
+    sha: str,
+    message: str,
+    author_name: Optional[str] = None,
+    author_email: Optional[str] = None,
+) -> dict:
+    """Commit ``new_text`` at ``path`` on an arbitrary branch (not cfg.branch).
+
+    Mirrors :func:`commit_file_at` but lets the caller target a branch other
+    than the configured default — used by Mode Dev to commit on a fresh
+    ``mode-dev/<slug>`` branch before opening the PR.
+    """
+    url = f"{API_BASE}/repos/{cfg.repo}/contents/{path}"
+    encoded = base64.b64encode(new_text.encode("utf-8")).decode("ascii")
+    body: dict[str, Any] = {
+        "message": message,
+        "content": encoded,
+        "branch": branch,
+    }
+    if sha:
+        body["sha"] = sha
+    if author_name or author_email:
+        body["committer"] = {
+            "name": author_name or "Revio Onboarding Bot",
+            "email": author_email or "bot@gorevio.co",
+        }
+    return _http("PUT", url, cfg.token, body=body)
+
+
+def fetch_file_on_branch(cfg: GitHubConfig, path: str, branch: str) -> RemoteFile:
+    """Read ``path`` from a specific branch (not cfg.branch).
+
+    Returns an empty :class:`RemoteFile` (text="", sha="") on 404 so callers
+    can decide whether to create the file on first commit.
+    """
+    url = f"{API_BASE}/repos/{cfg.repo}/contents/{path}?ref={branch}"
+    try:
+        payload = _http("GET", url, cfg.token)
+    except GitHubFileNotFound:
+        return RemoteFile(text="", sha="")
+    content_b64 = payload.get("content") or ""
+    sha = payload.get("sha") or ""
+    try:
+        text = base64.b64decode(content_b64).decode("utf-8")
+    except Exception as e:
+        raise GitHubSyncError(
+            "Réponse GitHub illisible (base64 invalide).", cause=e
+        ) from e
+    return RemoteFile(text=text, sha=sha)
+
+
 def save_value_mappings_yaml(
     yaml_text: str,
     *,

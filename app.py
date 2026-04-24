@@ -24,6 +24,7 @@ except ImportError:
 from src.detectors import detect, label_for, SOURCE_TYPE_LABELS
 from src.llm_mapper import propose_mapping
 from src.chat_assistant import chat_turn as _chat_turn
+from src.mode_dev import render_mode_dev_page as _render_mode_dev_page
 from src.pipeline import (
     SourceFile,
     load_tabular,
@@ -544,6 +545,10 @@ NAV_ITEMS = [
     ("mappings", "🗂️",   "Mappings mémorisés"),
     # Jalon 5.0.1 — assistant LLM (AM mode) : Q&A sur l'import en cours
     ("assistant", "🤖",  "Assistant"),
+    # Jalon 5.0.2 — Mode Dev : éditeur de règles YAML en langage naturel,
+    # ouvre une PR GitHub. Visible pour tous mais gardé par un email allowlist
+    # dans la page elle-même (MODE_DEV_EMAILS dans les Secrets Streamlit).
+    ("mode_dev", "🛠️",  "Mode Dev"),
 ]
 
 with st.sidebar:
@@ -4656,6 +4661,9 @@ elif st.session_state.mode == "mappings":
 
 elif st.session_state.mode == "assistant":
     render_chat_page()
+
+elif st.session_state.mode == "mode_dev":
+    _render_mode_dev_page()
 
 # ========== Classic mode: horizontal stepper above step content ==========
 elif st.session_state.mode == "classic":
