@@ -2393,9 +2393,10 @@ def _render_contract_tab_body(engine_files: dict) -> None:
     """
     st.caption(
         "Applique les règles de `src/rules/contract.yml` et produit un CSV "
-        "contrats prêt pour Revio, clé primaire **(plaque, numéro de contrat)**. "
-        "Les factures PDF déposées en haut sont automatiquement parsées et "
-        "reconnues ici."
+        "contrats prêt pour Revio. **L'entrée = la plaque** : 1 ligne par "
+        "plaque du fichier client, enrichie depuis les loueurs quand la "
+        "plaque y figure. Les factures PDF déposées en haut sont "
+        "automatiquement parsées et reconnues ici."
     )
     if not rules_io.list_available_tables():
         st.warning("contract.yml introuvable — le moteur Contract n'est pas encore configuré.")
@@ -2437,22 +2438,41 @@ def _render_contract_tab_body(engine_files: dict) -> None:
     probe_issues = probe_result.issues if probe_result is not None else []
 
     # Surface engine-level warnings from the probe so the user sees them
-    # upfront rather than after Appliquer. Plate-primary indexing (Jalon
-    # 4.2.6) surfaces two kinds of pre-run warnings :
-    #   · ``field="plate"`` + ``source=<slug>`` — doublons de plaque dans un
-    #     fichier loueur (seule la 1re ligne est retenue).
-    #   · ``source="__engine__"`` — import sans fichier client (parc dérivé
-    #     de l'union des loueurs).
-    pre_run_warnings = [
-        i for i in probe_issues
-        if getattr(i, "warning", None)
-        and (
-            getattr(i, "source", "") == "__engine__"
-            or getattr(i, "field", "") == "plate"
+    # upfront rather than après Appliquer. On distingue 3 familles :
+    #   · import sans fichier client (source="__engine__")
+    #   · doublons de plaque dans un loueur (field="plate", plate=None)
+    #   · cross-check : plaque présente chez un loueur mais absente du
+    #     client file (field="plate", plate=<plate>). On regroupe ces
+    #     derniers par source pour ne PAS empiler N warnings identiques
+    #     (régression UX signalée par Augustin le 2026-04-24).
+    engine_banners: list[str] = []
+    dup_banners: list[str] = []
+    cross_by_slug: dict[str, list[str]] = {}
+    for i in probe_issues:
+        w = getattr(i, "warning", None)
+        if not w:
+            continue
+        src = getattr(i, "source", "") or ""
+        field = getattr(i, "field", "") or ""
+        plate = getattr(i, "plate", None)
+        if src == "__engine__":
+            engine_banners.append(w)
+        elif field == "plate" and plate is None:
+            dup_banners.append(w)
+        elif field == "plate" and plate:
+            cross_by_slug.setdefault(src or "?", []).append(str(plate))
+
+    for w in engine_banners:
+        st.warning("⚠️ " + w)
+    for w in dup_banners:
+        st.warning("⚠️ " + w)
+    for slug, plates in cross_by_slug.items():
+        sample = ", ".join(plates[:5]) + ("…" if len(plates) > 5 else "")
+        st.info(
+            f"ℹ️ **{len(plates)} plaque(s)** présente(s) dans `{slug}` "
+            f"mais absente(s) du fichier client → ranger dans *orphelins*. "
+            f"_Ex : {sample}_"
         )
-    ]
-    for w in pre_run_warnings:
-        st.warning("⚠️ " + w.warning)
 
     if probe_unknowns:
         st.markdown("#### 🧩 Mapping manuel — champs obligatoires non reconnus")
