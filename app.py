@@ -2661,7 +2661,14 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
     on s'en sert uniquement pour enrichir l'info "n contrats concernés"
     dans les captions.
     """
-    patterns_path = Path(__file__).parent / "src" / "rules" / "learned_patterns.yml"
+    # Jalon 4.2.8 : on isole les column overrides Contract dans un fichier
+    # DISTINCT des signatures de pattern Vehicle (``learned_patterns.yml``).
+    # Ces deux systèmes vivaient dans le même fichier depuis 4.1.7 et leurs
+    # shapes sont incompatibles : Vehicle stocke ``patterns: [list]``, Contract
+    # veut ``patterns: {dict}``. Conséquence : le clic Mémoriser côté Contract
+    # crashait avec ``'list' object has no attribute 'setdefault'`` et/ou
+    # clobberait les pattern signatures Vehicle à la sauvegarde.
+    patterns_path = Path(__file__).parent / "src" / "rules" / "learned_columns.yml"
     user_email = st.session_state.get("current_user") or _current_user_email()
 
     # Build req-by-field-name for caption enrichment (affected_count etc.)
@@ -2863,10 +2870,12 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
                     try:
                         if gh.is_configured():
                             yml_text = patterns_path.read_text(encoding="utf-8")
-                            gh.save_learned_patterns_yaml(
+                            # Jalon 4.2.8 : commit sur learned_columns.yml
+                            # (distinct de learned_patterns.yml).
+                            gh.save_learned_columns_yaml(
                                 yml_text,
                                 commit_message=(
-                                    f"learned_patterns: contract.{slug} "
+                                    f"learned_columns: contract.{slug} "
                                     f"({saved} champs) via UI"
                                 ),
                                 author_email=user_email,

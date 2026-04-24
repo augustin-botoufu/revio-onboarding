@@ -628,6 +628,43 @@ def save_learned_patterns_yaml(
     )
 
 
+def save_learned_columns_yaml(
+    yaml_text: str,
+    *,
+    commit_message: str = "learned_columns: update via app",
+    author_email: Optional[str] = None,
+) -> dict:
+    """Commit the full learned_columns.yml to GitHub (Jalon 4.2.8).
+
+    Distinct from ``save_learned_patterns_yaml`` : learned_columns.yml stores
+    Contract-side field → source column overrides (dict shape), while
+    learned_patterns.yml stores Vehicle format signatures (list shape). Mixing
+    them in one file crashed the Contract Mémoriser flow in 4.2.7.
+    """
+    cfg = get_config()
+    path = "src/rules/learned_columns.yml"
+
+    last_err: Optional[GitHubConflict] = None
+    for _attempt in range(_MAX_CONFLICT_RETRIES):
+        remote = fetch_file(cfg, path)
+        if remote.text == yaml_text:
+            return {"skipped": True, "reason": "no_change"}
+        try:
+            return commit_file_at(
+                cfg, path, yaml_text,
+                sha=remote.sha, message=commit_message, author_email=author_email,
+            )
+        except GitHubConflict as e:
+            last_err = e
+            continue
+    assert last_err is not None  # pragma: no cover
+    raise GitHubSyncError(
+        "Écritures concurrentes sur learned_columns.yml, abandon après "
+        f"{_MAX_CONFLICT_RETRIES} essais. Réessaie dans quelques secondes.",
+        cause=last_err,
+    )
+
+
 def save_value_mappings_yaml(
     yaml_text: str,
     *,

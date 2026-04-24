@@ -65,7 +65,12 @@ def load_learned_patterns(path: str | Path) -> dict:
         return {"patterns": {}}
     with open(p, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    data.setdefault("patterns", {})
+    # Some older checked-in versions of learned_patterns.yml have
+    # ``patterns: []`` (empty list) rather than ``{}``. ``setdefault``
+    # won't replace an existing list, so calling ``.setdefault()`` on
+    # ``data["patterns"]`` below would crash. Normalise the type here.
+    if not isinstance(data.get("patterns"), dict):
+        data["patterns"] = {}
     return data
 
 

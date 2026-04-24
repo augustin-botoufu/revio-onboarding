@@ -72,9 +72,193 @@ def normalize_date(v: Any) -> Tuple[Optional[str], list[Warning]]:
     return normalizers.normalize_date(v)
 
 
-# Alias: some rules call it "parse_date_fr" to signal explicit FR convention,
-# but our normalizer already tries dayfirst first, so it's the same function.
+# Aliases: several rules in contract.yml use more specific names to signal
+# intent (``date_fr_to_iso``) or to accept any parseable date
+# (``date_any_to_iso``). Our normalizer already tries FR-first dayfirst and
+# ISO formats, so they're all the same function. Registered explicitly so
+# that values don't leak through as pandas Timestamps ("2023-03-27
+# 00:00:00") — Bug Augustin Jalon 4.2.7.
 parse_date_fr = normalize_date
+date_iso = normalize_date
+date_any_to_iso = normalize_date
+date_fr_to_iso = normalize_date
+
+
+# ---------- Strings / numbers (generic) ----------
+
+
+def strip(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Trim whitespace. Pure string cleanup used in the YAML for identifier
+    fields (N° Contrat, references, driver refs)."""
+    if _is_empty(v):
+        return None, []
+    return str(v).strip(), []
+
+
+def float_fr(v: Any) -> Tuple[Optional[float], list[Warning]]:
+    """French-convention float parsing (comma decimal, spaces as thousand
+    separators, currency suffix tolerated). Reuses ``normalize_amount``."""
+    return normalizers.normalize_amount(v)
+
+
+# The YAML distinguishes ``float_fr`` (unit prices, totals) from
+# ``float_fr_rubrique`` (amounts per rubrique in factures). Engine-side
+# the parsing is identical — the distinction is only for lineage.
+float_fr_rubrique = float_fr
+
+
+# ---------- Booleans ----------
+
+
+_BOOL_TRUE = {"true", "vrai", "oui", "yes", "y", "1", "t", "ok", "x", "check"}
+_BOOL_FALSE = {"false", "faux", "non", "no", "n", "0", "f"}
+
+
+def bool_fr(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Parse FR / EN boolean-ish value to ``'TRUE'`` / ``'FALSE'``.
+
+    Output matches Revio spec's ``TRUE`` / ``FALSE`` uppercase strings
+    (see contract.yml enum declarations). Returns None when unparseable
+    so downstream rule priorities can try the next source.
+    """
+    if _is_empty(v):
+        return None, []
+    if isinstance(v, bool):
+        return ("TRUE" if v else "FALSE"), []
+    if isinstance(v, (int, float)):
+        return ("TRUE" if v else "FALSE"), []
+    s = str(v).strip().lower()
+    if s in _BOOL_TRUE:
+        return "TRUE", []
+    if s in _BOOL_FALSE:
+        return "FALSE", []
+    return None, [f"Booléen non reconnu: {v!r}"]
+
+
+# ---------- Prestation / Maintenance rules ----------
+
+
+# Blacklist of "no prestation" values that must be read as FALSE even though
+# the cell is non-empty. Two kinds of markers:
+#   - substring markers : long enough to be unambiguous inside any cell
+#   - exact markers : short strings (like "nc") that must match the whole
+#     trimmed value, otherwise they fire inside words (e.g. "nc" inside
+#     "maintenance" — bug caught in Jalon 4.2.7 testing).
+_PRESTATION_ABSENT_SUBSTRINGS = (
+    "aucune prestation",
+    "aucun entretien",
+    "non souscrite",
+    "non souscrit",
+    "pas de prestation",
+    "pas de maintenance",
+    "pas d'entretien",
+    "hors prestation",
+    "sans prestation",
+    "sans maintenance",
+)
+_PRESTATION_ABSENT_EXACT = {"aucun", "aucune", "non", "nc", "n/a", "na",
+                            "-", "/"}
+
+
+def _is_prestation_absent(s: str) -> bool:
+    low = s.strip().lower()
+    if not low:
+        return True
+    if low in _PRESTATION_ABSENT_EXACT:
+        return True
+    for marker in _PRESTATION_ABSENT_SUBSTRINGS:
+        if marker in low:
+            return True
+    return False
+
+
+def rule_field_present(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Returns ``'TRUE'`` if the cell holds a non-blacklisted value,
+    ``'FALSE'`` otherwise. Used by ``maintenanceEnabled``, ``tiresEnabled``
+    etc. where the source says either the contract name ("réseau ayvens")
+    or a sentinel like "aucune prestation"."""
+    if _is_empty(v):
+        return "FALSE", []
+    if _is_prestation_absent(str(v)):
+        return "FALSE", []
+    return "TRUE", []
+
+
+def rule_source_present(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Similar to ``rule_field_present`` but the YAML already guarantees
+    the row exists in the source file (e.g. plate listed in Ayvens Pneus),
+    so any non-empty value means TRUE."""
+    if _is_empty(v):
+        return None, []  # caller should treat as "row absent"
+    return "TRUE", []
+
+
+# ---------- Enum mappings ----------
+
+
+def enum_mapping(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Catégorie VR (A-H). Accepts either a single letter or a word.
+    Values longer than 1 char are passed through uppercased so user-edited
+    client files keep working. Returns None when empty."""
+    if _is_empty(v):
+        return None, []
+    s = str(v).strip().upper()
+    if len(s) == 1 and s.isalpha() and s <= "H":
+        return s, []
+    # Tolerate labels "Catégorie A", "CAT. B" etc.
+    m = re.search(r"\b([A-H])\b", s)
+    if m:
+        return m.group(1), []
+    return s, [f"Catégorie VR non standard: {v!r}"]
+
+
+def enum_mapping_2(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Map a 'Maintenance souscrite' text (loueur-specific vocabulary) to
+    Revio's 2-value enum ``any`` / ``specialist``.
+
+    Rules (derived from spec_contract_v2 Q3 + Ayvens EP real data):
+    - empty / "aucune prestation" → None (no prestation at all, caller
+      sets maintenanceEnabled=FALSE)
+    - "réseau ayvens" / "réseau <loueur>" / "any" → any (generic network)
+    - "autre prestation …" / "specialist" / "spécialiste" / "marque" /
+      "concession" / "constructeur" → specialist
+    - other non-empty values → any (safe default: prestation exists, no
+      specialist signal found → falls back to the generic network).
+    """
+    if _is_empty(v):
+        return None, []
+    s = str(v).strip()
+    if _is_prestation_absent(s):
+        return None, []
+    low = s.lower()
+    # Specialist signals — external / constructor / named brand networks.
+    if any(k in low for k in ("autre prestation", "specialist", "spécialiste",
+                              "specialiste", "special", "spécial",
+                              "concession", "marque", "constructeur",
+                              "réseau constructeur", "reseau constructeur")):
+        return "specialist", []
+    return "any", []
+
+
+def enum_mapping_tires(v: Any) -> Tuple[Optional[str], list[Warning]]:
+    """Map tire prestation label to Revio enum ``standard`` / ``winter``
+    / ``4seasons``."""
+    if _is_empty(v):
+        return None, []
+    s = str(v).strip().lower()
+    if _is_prestation_absent(s):
+        return None, []
+    if any(k in s for k in ("4 saisons", "4saisons", "quatre saisons",
+                            "all-season", "all season", "4s", "toutes saisons")):
+        return "4seasons", []
+    if any(k in s for k in ("hiver", "neige", "winter", "snow", "m+s", "3pmsf")):
+        return "winter", []
+    if any(k in s for k in ("été", "ete", "summer", "standard", "route",
+                            "tourisme", "mixte", "pneu standard")):
+        return "standard", []
+    # Default when something is declared but unrecognized: assume standard
+    # (most common contract prestation) and warn.
+    return "standard", [f"Type pneus non reconnu: {v!r} — 'standard' par défaut"]
 
 
 # ---------- Plate / VIN / Country ----------
@@ -225,8 +409,16 @@ TRANSFORMS: dict[str, TransformFn] = {
     "uppercase": uppercase,
     "title_case": title_case,
     "to_int": to_int,
+    "int": to_int,            # YAML contract alias
+    "strip": strip,
+    "float_fr": float_fr,
+    "float_fr_rubrique": float_fr_rubrique,
+    "bool_fr": bool_fr,
     "normalize_date": normalize_date,
     "parse_date_fr": parse_date_fr,
+    "date_iso": date_iso,
+    "date_any_to_iso": date_any_to_iso,
+    "date_fr_to_iso": date_fr_to_iso,
     "normalize_plate": normalize_plate,
     "normalize_vin": normalize_vin,
     "normalize_country_code": normalize_country_code,
@@ -235,6 +427,12 @@ TRANSFORMS: dict[str, TransformFn] = {
     "map_siv_usage": map_siv_usage,
     "map_loueur_usage": map_loueur_usage,
     "map_client_usage": map_client_usage,
+    # Prestation / maintenance rules (contract.yml)
+    "rule_field_present": rule_field_present,
+    "rule_source_present": rule_source_present,
+    "enum_mapping": enum_mapping,
+    "enum_mapping_2": enum_mapping_2,
+    "enum_mapping_tires": enum_mapping_tires,
 }
 
 

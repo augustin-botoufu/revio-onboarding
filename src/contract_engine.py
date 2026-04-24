@@ -253,8 +253,18 @@ def _values_differ(a, b) -> bool:
     return a != b
 
 
-def _within_tolerance(a: float, b: float, pct: float = 0.02, abs_tol: float = 2.0) -> bool:
+def _within_tolerance(a: Any, b: Any, pct: float = 0.02, abs_tol: float = 2.0) -> bool:
+    """Return True if two numeric values are within ``max(abs_tol, pct*max)``.
+
+    Guarded against non-numeric inputs (Jalon 4.2.8) — if either argument is
+    anything other than int/float (e.g. a raw string that leaked through a
+    client_file IA-mapping without a price transform), return False so the
+    caller falls through to the normal "different values → conflict" path
+    rather than crashing on ``"25000" - "25000"``.
+    """
     if a is None or b is None:
+        return False
+    if not isinstance(a, (int, float)) or not isinstance(b, (int, float)):
         return False
     delta = abs(a - b)
     max_val = max(abs(a), abs(b))
@@ -287,7 +297,11 @@ def _apply_rule_transform(raw: Any, transform_name: str) -> tuple[Any, list[str]
     if name in {"cross_check", "BANNED", "rule_isHT_from_VP_EP",
                 "rule_isHT_from_VP_API", "compute_months",
                 "sum_whitelist", "regex_number", "regex_duration",
-                "regex_mileage", "regex_start_date", "regex_restit_date"}:
+                "regex_mileage", "regex_start_date", "regex_restit_date",
+                # Rule-markers resolved at post-pass (need sibling fields).
+                "rule_price_positive", "rule_or",
+                # Lookup transforms resolved at write time (partner index).
+                "lookup_partner", "lookup_by_source_slug"}:
         # These are markers consumed elsewhere — passthrough the raw
         # value so the engine can still record it in lineage.
         return raw if raw is not None else None, []
