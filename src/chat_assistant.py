@@ -7,10 +7,11 @@ ask plain-language questions like:
     · "Quels sont les warnings côté contrats ?"
     · "C'est quoi le slug `ayvens_etat_parc` ?"
 
-The assistant has READ-ONLY access to the session via 4 tools:
+The assistant has READ-ONLY access to the session via 5 tools:
     · get_session_state()            → files chargés + compte lignes/warnings
     · list_plates(table?, limit?)    → échantillon de plaques dispos
     · list_fields(table?)            → champs tracés dans le lineage
+    · get_cell_value(plate, field, table)  → valeur brute depuis l'output df
     · get_lineage(plate, field?, …)  → provenance d'une cellule (fuzzy match)
 
 Scope of 5.0.1: AM mode only, no YAML patches, no GitHub commit. The dev
@@ -74,21 +75,37 @@ OUTILS disponibles (read-only) :
    en sortie Vehicle/Contract, nombre de warnings. APPELLE CET OUTIL EN
    PREMIER si l'utilisateur pose une question générale sur la session.
 
-2. `list_plates` — liste les plaques effectivement présentes dans le lineage
-   (vehicle et/ou contract). UTILISE-LE DÈS QUE L'UTILISATEUR MENTIONNE UNE
-   PLAQUE : comme ça tu vérifies son existence avant de lancer get_lineage,
-   et tu peux proposer une plaque proche si la saisie est ambiguë.
+2. `list_plates` — liste les plaques effectivement présentes dans le
+   lineage et/ou dans les output DataFrames (vehicle + contract). UTILISE-LE
+   DÈS QUE L'UTILISATEUR MENTIONNE UNE PLAQUE : vérification d'existence,
+   proposition de plaque proche si saisie ambiguë.
 
 3. `list_fields` — liste les champs tracés dans le lineage avec leur
    fréquence. UTILISE-LE si l'utilisateur te donne un nom de champ qui
    pourrait être approximatif (typo, casse, pluriel) pour trouver la bonne
    orthographe avant de lancer get_lineage.
 
-4. `get_lineage(plate, field?, table?)` — trace de provenance d'une
-   cellule. Matching tolérant : la casse et les tirets sont ignorés, donc
-   "ab123cd", "AB-123-CD" et "ab-123-cd" trouvent le même véhicule.
-   Retourne la valeur finale, la source gagnante, la règle YAML, la
-   transform, ET la liste des candidats écartés avec la raison du rejet.
+4. `get_cell_value(plate, field, table)` — lit LA VALEUR FINALE depuis
+   l'output DataFrame (vehicle ou contract). À UTILISER EN PRIORITÉ quand
+   l'utilisateur demande "quelle est la valeur de X pour la plaque Y ?" —
+   c'est l'équivalent d'un Ctrl+F dans le fichier de sortie. Retourne la
+   valeur brute exacte (même si le lineage est vide ou incomplet).
+
+5. `get_lineage(plate, field?, table?)` — trace de PROVENANCE d'une
+   cellule : d'où vient la valeur, quels candidats ont été écartés et
+   pourquoi. À utiliser APRÈS get_cell_value quand la question est
+   "pourquoi cette valeur / d'où vient-elle ?" Matching tolérant : la
+   casse et les tirets sont ignorés ("ab123cd" == "AB-123-CD").
+
+STRATÉGIE selon la question :
+
+- "quelle est la valeur de X pour la plaque Y ?" → `get_cell_value`
+- "d'où vient la valeur X ?" / "pourquoi cette valeur ?" →
+  `get_cell_value` PUIS `get_lineage` (la valeur d'abord, puis son origine).
+- Si `get_lineage` retourne 0 records MAIS `get_cell_value` retourne une
+  valeur : ne pas dire "aucune donnée" — dire que la VALEUR est X mais que
+  la TRACE de provenance n'a pas été enregistrée (peut arriver pour un
+  champ dérivé, une valeur par défaut, ou un run de moteur ancien).
 
 RÈGLES STRICTES :
 
@@ -189,6 +206,40 @@ TOOL_LIST_FIELDS = {
     },
 }
 
+TOOL_GET_CELL_VALUE = {
+    "name": "get_cell_value",
+    "description": (
+        "Lit la valeur finale d'une cellule directement dans l'output "
+        "DataFrame (vehicle ou contract). À utiliser quand l'utilisateur "
+        "demande 'quelle est la valeur de X pour Y ?' — c'est plus fiable "
+        "que get_lineage quand le lineage est incomplet. Matching tolérant "
+        "sur la plaque (casse + tirets/espaces ignorés)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "plate": {
+                "type": "string",
+                "description": "Plaque, ex: 'GS-836-VT' ou 'gs836vt'.",
+            },
+            "field": {
+                "type": "string",
+                "description": (
+                    "Nom du champ Revio (ex: 'contractedMileage', "
+                    "'vehicleValue', 'brand'). Si absent, retourne TOUS "
+                    "les champs non-null pour cette plaque."
+                ),
+            },
+            "table": {
+                "type": "string",
+                "enum": ["vehicle", "contract"],
+                "description": "Quelle table de sortie lire.",
+            },
+        },
+        "required": ["plate", "table"],
+    },
+}
+
 TOOL_GET_LINEAGE = {
     "name": "get_lineage",
     "description": (
@@ -232,6 +283,7 @@ ALL_TOOLS = [
     TOOL_GET_SESSION_STATE,
     TOOL_LIST_PLATES,
     TOOL_LIST_FIELDS,
+    TOOL_GET_CELL_VALUE,
     TOOL_GET_LINEAGE,
 ]
 
@@ -256,6 +308,34 @@ def _iter_lineage_records(session_ctx: dict, table_filter: Optional[str] = None)
             continue
         for r in getattr(store, "_records", []):
             yield table, r
+
+
+def _get_output_df(session_ctx: dict, table: str):
+    """Return the output DataFrame for a table, or None."""
+    key = "engine_result" if table == "vehicle" else "contract_result"
+    res = session_ctx.get(key)
+    if not res:
+        return None
+    return getattr(res, "df", None)
+
+
+def _find_plate_row(df, plate_canon: str):
+    """Return the matching index (first hit) in df for a canonicalized
+    plate, or None. Works whether the index contains canonical ('GS836VT')
+    or hyphenated ('GS-836-VT') plates."""
+    if df is None or len(df) == 0:
+        return None
+    for idx in df.index:
+        if idx is None:
+            continue
+        if _plate_key(idx) == plate_canon:
+            return idx
+    # Fallback: look in a 'plate' column if index-based match fails.
+    if "plate" in df.columns:
+        for idx, val in df["plate"].items():
+            if _plate_key(val) == plate_canon:
+                return idx
+    return None
 
 
 # =============================================================================
@@ -310,25 +390,58 @@ def _dispatch_get_session_state(session_ctx: dict) -> dict:
 
 
 def _dispatch_list_plates(tool_input: dict, session_ctx: dict) -> dict:
-    """Return a sample of plates keyed per table + total counts."""
+    """Return plates per table from BOTH the lineage AND the output df.
+
+    Using the output df as a source of truth means we surface plates even
+    when the lineage is missing/empty (e.g. contract engine was run but
+    lineage instrumentation skipped some cells).
+    """
     table = tool_input.get("table") or "both"
     query = _plate_key(tool_input.get("query") or "")
     limit = int(tool_input.get("limit") or 50)
     limit = max(1, min(limit, 500))
 
-    per_table: dict[str, list[str]] = {"vehicle": [], "contract": []}
-    seen_per_table: dict[str, set] = {"vehicle": set(), "contract": set()}
+    per_table: dict[str, set[str]] = {"vehicle": set(), "contract": set()}
+    sources: dict[str, dict[str, int]] = {
+        "vehicle": {"from_df": 0, "from_lineage": 0},
+        "contract": {"from_df": 0, "from_lineage": 0},
+    }
 
+    # 1) lineage
     for tbl, r in _iter_lineage_records(session_ctx, table):
         key = r.key or ""
+        if not key:
+            continue
         if query and query not in _plate_key(key):
             continue
-        if key in seen_per_table[tbl]:
-            continue
-        seen_per_table[tbl].add(key)
-        per_table[tbl].append(key)
+        if key not in per_table[tbl]:
+            sources[tbl]["from_lineage"] += 1
+        per_table[tbl].add(key)
 
-    out = {"query": {"table": table, "query": tool_input.get("query"), "limit": limit}}
+    # 2) output df
+    for tbl in ("vehicle", "contract"):
+        if table != "both" and table != tbl:
+            continue
+        df = _get_output_df(session_ctx, tbl)
+        if df is None or len(df) == 0:
+            continue
+        # Prefer index, fallback to 'plate' col.
+        keys_iter = list(df.index) if df.index.name else list(df.index)
+        for k in keys_iter:
+            if k is None:
+                continue
+            s = str(k)
+            if not s:
+                continue
+            if query and query not in _plate_key(s):
+                continue
+            if s not in per_table[tbl]:
+                sources[tbl]["from_df"] += 1
+            per_table[tbl].add(s)
+
+    out = {
+        "query": {"table": table, "query": tool_input.get("query"), "limit": limit},
+    }
     for tbl in ("vehicle", "contract"):
         if table != "both" and table != tbl:
             continue
@@ -337,6 +450,7 @@ def _dispatch_list_plates(tool_input: dict, session_ctx: dict) -> dict:
             "total": len(plates_all),
             "sample": plates_all[:limit],
             "truncated": len(plates_all) > limit,
+            "sources_counts": sources[tbl],
         }
     return out
 
@@ -357,6 +471,119 @@ def _dispatch_list_fields(tool_input: dict, session_ctx: dict) -> dict:
             "fields": [{"field": f, "n": n} for f, n in items],
         }
     return out
+
+
+def _dispatch_get_cell_value(tool_input: dict, session_ctx: dict) -> dict:
+    """Read a value (or all values) directly from the output DataFrame."""
+    raw_plate = (tool_input.get("plate") or "").strip()
+    field = tool_input.get("field")
+    table = tool_input.get("table") or "vehicle"
+
+    if not raw_plate:
+        return {"error": "paramètre 'plate' requis"}
+    if table not in ("vehicle", "contract"):
+        return {"error": f"table '{table}' invalide — utilise 'vehicle' ou 'contract'."}
+
+    plate_canon = _plate_key(raw_plate)
+    df = _get_output_df(session_ctx, table)
+    if df is None:
+        return {
+            "error": (
+                f"Pas d'output {table} disponible. L'utilisateur a peut-être "
+                f"oublié de lancer le moteur {'Vehicle' if table == 'vehicle' else 'Contract'}."
+            ),
+            "query": {"plate": raw_plate, "field": field, "table": table},
+        }
+
+    idx = _find_plate_row(df, plate_canon)
+    if idx is None:
+        # Surface 5 nearest keys to help propose a correction
+        candidates = []
+        for k in df.index:
+            if k is None:
+                continue
+            kc = _plate_key(k)
+            if not kc:
+                continue
+            if len(plate_canon) >= 2 and (kc[:2] == plate_canon[:2] or kc[-2:] == plate_canon[-2:]):
+                candidates.append(str(k))
+        return {
+            "found": False,
+            "plate_in_df": False,
+            "hint_nearest_plates": sorted(candidates)[:5],
+            "query": {"plate": raw_plate, "plate_canonical": plate_canon,
+                      "field": field, "table": table},
+        }
+
+    row = df.loc[idx]
+
+    def _clean(v: Any) -> Any:
+        # Replace NaN with None and coerce numpy scalars to Python native
+        # types so JSON serialization keeps the right type (int stays int).
+        try:
+            import pandas as pd
+            if v is None:
+                return None
+            # pd.isna handles NaN for both numpy and Python scalars.
+            try:
+                if pd.isna(v):
+                    return None
+            except (TypeError, ValueError):
+                pass  # arrays / non-scalar → not null
+            if isinstance(v, bool):
+                return v
+            # numpy ints → python int; numpy floats → python float
+            if hasattr(v, "item") and callable(getattr(v, "item", None)):
+                try:
+                    return v.item()
+                except Exception:
+                    pass
+            if isinstance(v, (int, float, str)):
+                return v
+            return str(v)
+        except Exception:
+            return str(v)
+
+    if field:
+        if field not in df.columns:
+            # Suggest available fields
+            return {
+                "found": False,
+                "plate_in_df": True,
+                "matched_key": str(idx),
+                "error": f"champ '{field}' absent de la table {table}.",
+                "hint_available_fields": sorted([c for c in df.columns
+                                                 if not str(c).startswith("__")]),
+                "query": {"plate": raw_plate, "field": field, "table": table},
+            }
+        val = _clean(row[field])
+        return {
+            "found": True,
+            "plate_in_df": True,
+            "matched_key": str(idx),
+            "field": field,
+            "value": val,
+            "is_null": val is None,
+            "table": table,
+        }
+
+    # No field → return all non-null cells
+    cells = {}
+    for col in df.columns:
+        if str(col).startswith("__"):
+            continue
+        v = _clean(row[col])
+        if v is None:
+            continue
+        cells[str(col)] = v
+    return {
+        "found": True,
+        "plate_in_df": True,
+        "matched_key": str(idx),
+        "table": table,
+        "non_null_fields": cells,
+        "n_non_null": len(cells),
+    }
 
 
 def _dispatch_get_lineage(tool_input: dict, session_ctx: dict) -> dict:
@@ -447,6 +674,8 @@ def _dispatch_tool(name: str, tool_input: dict, session_ctx: dict) -> Any:
         return _dispatch_list_plates(tool_input, session_ctx)
     if name == "list_fields":
         return _dispatch_list_fields(tool_input, session_ctx)
+    if name == "get_cell_value":
+        return _dispatch_get_cell_value(tool_input, session_ctx)
     if name == "get_lineage":
         return _dispatch_get_lineage(tool_input, session_ctx)
     return {"error": f"tool inconnu: {name}"}
