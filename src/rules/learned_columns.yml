@@ -1,19 +1,17 @@
-# Learned column overrides — mappings persistés via le bouton "💾 Mémoriser
-# ce format" de l'onglet Contract (et plus tard Vehicle, si on unifie).
-#
-# Format (écrit par src/unknown_columns.py::register_learned_column) :
-#
-#   patterns:
-#     <table>:
-#       <source_slug>:
-#         <field_name>:
-#           column: <header_source_choisi_par_user>
-#           learned_on: <ISO-8601>
-#           learned_by: <email>
-#           sample_values: [<v1>, <v2>, <v3>]
-#
-# Ce fichier est DISTINCT de `learned_patterns.yml` (qui stocke les
-# signatures de détection de format Vehicle, format liste), pour éviter le
-# conflit de shape qui crashait Mémoriser en 4.2.7.
-
-patterns: {}
+patterns:
+  contract:
+    ayvens_aen:
+      plate:
+        column: Immatriculation
+        learned_on: '2026-04-24T16:45:10+00:00'
+        learned_by: unknown
+        sample_values:
+        - GM-234-LM
+        - GQ-213-VT
+      vehicleValue:
+        column: Prix achat net TTC
+        learned_on: '2026-04-24T16:45:10+00:00'
+        learned_by: unknown
+        sample_values:
+        - 27132,31
+        - '20553'
