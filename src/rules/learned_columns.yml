@@ -1,19 +1,43 @@
-# Learned column overrides — mappings persistés via le bouton "💾 Mémoriser
-# ce format" de l'onglet Contract (et plus tard Vehicle, si on unifie).
-#
-# Format (écrit par src/unknown_columns.py::register_learned_column) :
-#
-#   patterns:
-#     <table>:
-#       <source_slug>:
-#         <field_name>:
-#           column: <header_source_choisi_par_user>
-#           learned_on: <ISO-8601>
-#           learned_by: <email>
-#           sample_values: [<v1>, <v2>, <v3>]
-#
-# Ce fichier est DISTINCT de `learned_patterns.yml` (qui stocke les
-# signatures de détection de format Vehicle, format liste), pour éviter le
-# conflit de shape qui crashait Mémoriser en 4.2.7.
-
-patterns: {}
+patterns:
+  contract:
+    ayvens_pneus:
+      plate:
+        column: Immatriculation
+        learned_on: '2026-04-29T12:30:19+00:00'
+        learned_by: unknown
+        sample_values:
+        - HF-735-NH
+        - HF-399-YZ
+        - HH-684-RN
+      tiresAmount:
+        column: Pneus souscrits au contrat
+        learned_on: '2026-04-29T12:30:19+00:00'
+        learned_by: unknown
+        sample_values:
+        - '0'
+        - '6'
+        - '6'
+      tiresAmountUsed:
+        column: Pneus utilisés
+        learned_on: '2026-04-29T12:30:19+00:00'
+        learned_by: unknown
+        sample_values:
+        - '0'
+        - '0'
+        - '0'
+      tiresEnabled:
+        column: Pneus restants
+        learned_on: '2026-04-29T12:30:19+00:00'
+        learned_by: unknown
+        sample_values:
+        - '0'
+        - '6'
+        - '6'
+      tiresNetwork:
+        column: Réseau prestataire
+        learned_on: '2026-04-29T12:30:19+00:00'
+        learned_by: unknown
+        sample_values:
+        - ''
+        - Réseau prestataire Ayvens
+        - Réseau prestataire Ayvens
