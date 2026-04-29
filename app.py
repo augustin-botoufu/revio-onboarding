@@ -38,6 +38,7 @@ from src.schemas import SCHEMAS, header_for
 from src import rules_engine
 from src import rules_io
 from src import contract_engine as ce
+from src import driver_engine as de
 from src import pdf_parser as pdfp
 from src import unknown_columns as unkcol
 from src import learned_patterns as lp
@@ -90,6 +91,8 @@ ENGINE_SOURCE_SLUGS = [
     "arval_facture_pdf",
     "ayvens_facture_pdf",
     "autre_loueur_facture_pdf",
+    # --- Driver (Jalon 5.1) — template already in Revio format, passthrough ---
+    "driver_file",
 ]
 
 # Human-readable label + icon for each source slug, for the grouped cards
@@ -118,6 +121,7 @@ SLUG_DISPLAY: dict[str, tuple[str, str, int]] = {
     "ayvens_facture_pdf":      ("📄", "Ayvens — Facture (PDF)",         61),
     "autre_loueur_facture_pdf":("📄", "Autre loueur — Facture (PDF)",   62),
     "client_file":             ("👤", "Fichier client",                90),
+    "driver_file":             ("🧑‍✈️", "Fichier Drivers (template Revio)", 95),
 }
 
 
@@ -520,6 +524,11 @@ def _init_state():
         # Resolved answers from the "colonne non identifiée" UI. Kept in memory
         # until the user validates — then persisted via register_learned_column.
         "contract_unknown_resolved": {},    # {(source_slug, field_name): column}
+        # --- Driver engine (Jalon 5.1) ---
+        # Driver template is already in Revio format — no mapping step. The
+        # result holds the normalised DataFrame + anomalies/warnings and feeds
+        # the Driver tab + the unified zip.
+        "driver_result": None,              # driver_engine.DriverResult or None
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -1881,6 +1890,16 @@ def _render_engine_uploader() -> None:
             key = f"{filename}::{sheet_name}" if sheet_name else filename
             detected = detect(filename, df, sheet_name=sheet_name or None)
             default_slug = DETECTOR_TO_YAML_SLUG.get(detected.source_type, "client_file")
+
+            # Jalon 5.1 — Driver template detection. The Driver table has a
+            # stable set of Revio column names (firstName / lastName / emailPro
+            # / licenseNumber / assignPlate …) which is distinctive enough to
+            # recognise regardless of filename or the detector's classifier.
+            # We override the slug so the file lands in the Driver tab instead
+            # of being sent to Vehicle / Contract (which would just ignore it).
+            if de.is_driver_shape([str(c) for c in df.columns]):
+                default_slug = "driver_file"
+
             learned_match = None
             if default_slug == "client_file" and _patterns:
                 learned_match = lp.match_pattern(
@@ -1923,6 +1942,7 @@ def _render_engine_uploader() -> None:
     st.session_state.engine_files = new_files
     st.session_state.engine_result = None        # invalidate Vehicle result
     st.session_state.contract_result = None      # invalidate Contract result
+    st.session_state.driver_result = None        # invalidate Driver result (Jalon 5.1)
     st.session_state.engine_uploaded_sig = current_sig
     st.success(f"{len(new_files)} fichier(s) chargé(s).")
     if _learned_hits:
@@ -2253,7 +2273,8 @@ def _render_unified_download() -> None:
     """
     v_result = st.session_state.get("engine_result")
     c_result = st.session_state.get("contract_result")
-    if v_result is None and c_result is None:
+    d_result = st.session_state.get("driver_result")
+    if v_result is None and c_result is None and d_result is None:
         return
 
     st.markdown("### 📦 Export — pack unifié")
@@ -2266,6 +2287,8 @@ def _render_unified_download() -> None:
         bits.append(f"{len(v_result.df)} véhicule(s)")
     if c_result is not None and c_result.df is not None and not c_result.df.empty:
         bits.append(f"{len(c_result.df)} contrat(s)")
+    if d_result is not None and d_result.df is not None and not d_result.df.empty:
+        bits.append(f"{len(d_result.df)} driver(s)")
     if fleet_mapping is not None and fleet_mapping.is_active:
         bits.append(f"segmenté en {len(fleet_mapping.fleet_names)} flotte(s)")
     st.caption("📦 Le pack contiendra : " + " · ".join(bits) + " + rapports + classeur maître.")
@@ -2287,6 +2310,15 @@ def _render_unified_download() -> None:
             contract_errors_bytes = _build_contract_errors_xlsx(c_result, client_name=client_name)
         except Exception as e:
             st.warning(f"Rapport Excel contrats indisponible : {e}")
+
+    # Driver df + errors xlsx (Jalon 5.1) — passthrough template + anomalies.
+    driver_df = d_result.df if d_result is not None else None
+    driver_errors_bytes = None
+    if d_result is not None and (d_result.anomalies or d_result.warnings):
+        try:
+            driver_errors_bytes = _build_driver_errors_xlsx(d_result, client_name=client_name)
+        except Exception as e:
+            st.warning(f"Rapport Excel drivers indisponible : {e}")
 
     # Lineage sidecars (parquet if pyarrow available, jsonl fallback).
     lineage_bytes_by_name: dict[str, bytes] = {}
@@ -2321,6 +2353,8 @@ def _render_unified_download() -> None:
             contract_orphan_df=contract_orphan_df,
             contract_errors_xlsx_bytes=contract_errors_bytes,
             contract_fleet_mapping=fleet_mapping,  # shared fleet mapping by plate
+            driver_df=driver_df,
+            driver_errors_xlsx_bytes=driver_errors_bytes,
             extra_files=lineage_bytes_by_name,
         )
         st.download_button(
@@ -2407,6 +2441,171 @@ def _build_contract_errors_xlsx(result, *, client_name: str) -> bytes:
     return buf.getvalue()
 
 
+# ========== Driver errors xlsx (Jalon 5.1) ==========
+def _build_driver_errors_xlsx(result, *, client_name: str) -> bytes:
+    """Build drivers_errors.xlsx — 2 sheets (anomalies, warnings).
+
+    Driver table has no per-cell conflict concept (no multi-source merge):
+    anomalies surface "plaque assignée inconnue du fichier véhicules" and
+    "plaque assignée en doublon", warnings surface "civility inconnue".
+    Each row = one issue, with enough context for the AM to fix in place.
+    """
+    import io as _io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    def _header(ws, cols):
+        ws.append(cols)
+        for c in ws[1]:
+            c.font = Font(bold=True, color="FFFFFF")
+            c.fill = PatternFill("solid", start_color="1F2937")
+
+    # Sheet 1: anomalies (blocants — plaque absente / doublon)
+    ws = wb.create_sheet("anomalies")
+    _header(ws, ["ligne", "driver", "plaque", "code", "message"])
+    if result.anomalies:
+        for a in result.anomalies:
+            ws.append([a.row, a.driver, a.plate, a.code, a.message])
+    else:
+        ws.append(["", "", "", "", "Aucune anomalie détectée."])
+
+    # Sheet 2: warnings (civilité non reconnue)
+    ws2 = wb.create_sheet("warnings")
+    _header(ws2, ["ligne", "driver", "code", "message"])
+    if result.warnings:
+        for w in result.warnings:
+            ws2.append([w.row, w.driver, w.code, w.message])
+    else:
+        ws2.append(["", "", "", "Aucun avertissement."])
+
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ========== Driver tab body (Jalon 5.1) ==========
+def _render_driver_tab_body(engine_files: dict) -> None:
+    """Driver workspace (Jalon 5.1).
+
+    The Driver template is already in Revio column format, so there is NO
+    mapping step, no priority list, no concat across multiple sources. We
+    just :
+
+    1. Find the uploaded file tagged ``driver_file`` (via column fingerprint,
+       cf. ``driver_engine.is_driver_shape``).
+    2. Run :func:`driver_engine.process_drivers` on it, passing the plates
+       from the Vehicle result when available, so "unknown plate" anomalies
+       fire.
+    3. Display the normalised DataFrame + counts + anomalies/warnings.
+
+    Augustin, 2026-04-22 : « Rien à matcher. Simple. »
+    """
+    st.caption(
+        "Table Drivers — le template est déjà au format Revio. Le moteur "
+        "normalise la civilité, ajoute la date d'expiration 2033/01/19 pour "
+        "les anciens permis FR sans date imprimée, et signale les plaques "
+        "assignées absentes du fichier véhicules ou dupliquées entre drivers."
+    )
+
+    # --- 1. Pick the driver_file in engine_files --------------------------
+    driver_keys = [
+        k for k, info in engine_files.items() if info.get("slug") == "driver_file"
+    ]
+    if not driver_keys:
+        st.info(
+            "Aucun fichier Driver détecté parmi les fichiers chargés. "
+            "Dépose le fichier Driver (template Revio avec `firstName`, "
+            "`lastName`, `emailPro`, `licenseNumber`, `assignPlate`…) dans "
+            "l'uploader en haut de la page."
+        )
+        return
+
+    # Multiple driver files? Concat them (with a little lineage column) so
+    # cross-file duplicates still trigger the anomaly.
+    frames = []
+    for k in driver_keys:
+        df_k = engine_files[k]["df"].copy()
+        df_k["__source_file"] = engine_files[k].get("filename", k)
+        frames.append(df_k)
+    driver_df_raw = pd.concat(frames, ignore_index=True) if len(frames) > 1 else frames[0]
+
+    st.markdown(f"#### 📄 {len(driver_keys)} fichier(s) Driver détecté(s)")
+    for k in driver_keys:
+        info = engine_files[k]
+        st.caption(
+            f"· **{info.get('filename', k)}** — {len(info['df'])} ligne(s)"
+        )
+
+    # --- 2. Pull vehicle plates from the Vehicle engine result (if any) ---
+    v_result = st.session_state.get("engine_result")
+    vehicle_plates: list[str] | None = None
+    if v_result is not None and v_result.df is not None and not v_result.df.empty:
+        vehicle_plates = de.extract_vehicle_plates(v_result.df)
+        st.caption(
+            f"🔗 Cross-check plaques : {len(vehicle_plates)} plaque(s) "
+            "récupérée(s) du moteur Véhicules."
+        )
+    else:
+        st.caption(
+            "🔗 Pas encore de résultat Véhicules — l'anomalie "
+            "« plaque inconnue » sera désactivée tant que le moteur "
+            "Véhicules n'a pas tourné. Les doublons sont vérifiés dans "
+            "tous les cas."
+        )
+
+    # --- 3. Run button ---------------------------------------------------
+    if st.button(
+        "▶️ Appliquer les règles Drivers",
+        type="primary",
+        key="driver_run_btn",
+        use_container_width=True,
+    ):
+        try:
+            with st.spinner("Normalisation des drivers..."):
+                result = de.process_drivers(driver_df_raw, vehicle_plates=vehicle_plates)
+            st.session_state.driver_result = result
+        except Exception as e:
+            st.error(f"Erreur moteur Drivers : {e}")
+            st.session_state.driver_result = None
+
+    result = st.session_state.get("driver_result")
+    if result is None:
+        return
+
+    # --- 4. Metrics ------------------------------------------------------
+    st.markdown("#### Résultat Drivers")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Drivers produits", result.n_drivers)
+    c2.metric("Avec plaque assignée", result.counts.get("with_plate", 0))
+    c3.metric(
+        "Anomalies",
+        result.n_anomalies,
+        delta="bloquant" if result.n_anomalies > 0 else None,
+        delta_color="inverse" if result.n_anomalies > 0 else "off",
+    )
+    c4.metric("Avertissements", len(result.warnings))
+
+    # --- 5. DataFrame preview -------------------------------------------
+    with st.expander("👁️ Aperçu du fichier Driver normalisé", expanded=False):
+        st.dataframe(result.df, use_container_width=True)
+
+    # --- 6. Anomalies ---------------------------------------------------
+    if result.anomalies:
+        st.markdown("#### 🚨 Anomalies")
+        df_ano = pd.DataFrame([a.as_record() for a in result.anomalies])
+        st.dataframe(df_ano, use_container_width=True)
+    else:
+        st.success("Aucune anomalie Driver détectée ✅")
+
+    # --- 7. Warnings (soft) ---------------------------------------------
+    if result.warnings:
+        st.markdown("#### ⚠️ Avertissements")
+        df_warn = pd.DataFrame([w.as_record() for w in result.warnings])
+        st.dataframe(df_warn, use_container_width=True)
+
+
 # ========== Engine page — unified uploader + table-centric tabs (Jalon 4.2.2) ==========
 def render_engine_page():
     """Top-level Moteur page (Jalon 4.2.2).
@@ -2438,11 +2637,13 @@ def render_engine_page():
     _render_engine_types_section(engine_files)
     _render_engine_fleet_controls()
 
-    tab_v, tab_c = st.tabs(["🚗 Véhicules", "📄 Contrats"])
+    tab_v, tab_c, tab_d = st.tabs(["🚗 Véhicules", "📄 Contrats", "🧑‍✈️ Drivers"])
     with tab_v:
         _render_vehicle_tab_body(engine_files)
     with tab_c:
         _render_contract_tab_body(engine_files)
+    with tab_d:
+        _render_driver_tab_body(engine_files)
 
     st.markdown("---")
     _render_unified_download()

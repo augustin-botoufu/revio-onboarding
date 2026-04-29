@@ -4,9 +4,10 @@ The UI requirement is « un seul bouton, un seul zip » with the following
 layout::
 
     revio_import_<client>_<ts>/
-    ├── onboarding_complet.xlsx      (master workbook, multi-tabs V + C)
+    ├── onboarding_complet.xlsx      (master workbook, multi-tabs V + C + D)
     ├── rapport.xlsx                  (per-cell source / anomalies véhicules)
     ├── contracts_errors.xlsx         (anomalies contrats — si dispo)
+    ├── drivers_errors.xlsx           (anomalies drivers — si dispo, Jalon 5.1)
     ├── vehicles/
     │   ├── vehicles_tous.csv         (every row, Revio header order)
     │   ├── vehicles_<slug>.csv       (one file per fleet)
@@ -15,6 +16,8 @@ layout::
     │   ├── contracts_tous.csv
     │   ├── contracts_<slug>.csv      (per fleet, plate-based)
     │   └── contracts_orphelins.csv   (contrats sans match client_file)
+    ├── drivers/                      (Jalon 5.1 — format-passthrough)
+    │   └── drivers_tous.csv
     └── _lineage/                     (optional — parquet/jsonl sidecars)
         ├── vehicle.parquet
         └── contract.parquet
@@ -167,6 +170,7 @@ def build_master_xlsx(
     contract_df: Optional[pd.DataFrame] = None,
     contract_orphan_df: Optional[pd.DataFrame] = None,
     contract_fleet_mapping: Optional[FleetMapping] = None,
+    driver_df: Optional[pd.DataFrame] = None,
 ) -> bytes:
     """Build a workbook with one tab per (schema, fleet) + a global tab.
 
@@ -219,6 +223,15 @@ def build_master_xlsx(
                 _write_df_to_sheet(ws, sub, "contract")
                 desc = f"Contrats flotte « {fleet_name} »"
                 plan.append((sheet_name, desc, len(sub)))
+
+    # ---- DRIVER (Jalon 5.1) ----
+    # Driver table is a format-passthrough: no fleet split (driver ≠ plate),
+    # just a single "drivers — tous" tab next to vehicles / contrats so the
+    # AM opens one workbook and sees everything the engine produced.
+    if driver_df is not None and not driver_df.empty:
+        ws_all = wb.create_sheet(safe_sheet_name("drivers — tous"))
+        _write_df_to_sheet(ws_all, driver_df, "driver")
+        plan.append((ws_all.title, "Tous les drivers", len(driver_df)))
 
     if contract_orphan_df is not None and not contract_orphan_df.empty:
         sheet_name = safe_sheet_name("contrats — orphelins")
@@ -324,6 +337,8 @@ def build_output_zip(
     contract_orphan_df: Optional[pd.DataFrame] = None,
     contract_errors_xlsx_bytes: Optional[bytes] = None,
     contract_fleet_mapping: Optional[FleetMapping] = None,
+    driver_df: Optional[pd.DataFrame] = None,
+    driver_errors_xlsx_bytes: Optional[bytes] = None,
     extra_files: Optional[dict[str, bytes]] = None,
     timestamp: Optional[datetime] = None,
 ) -> tuple[bytes, str]:
@@ -356,6 +371,7 @@ def build_output_zip(
             contract_df=contract_df,
             contract_orphan_df=contract_orphan_df,
             contract_fleet_mapping=contract_fleet_mapping,
+            driver_df=driver_df,
         )
         zf.writestr(f"{root}/onboarding_complet.xlsx", master_bytes)
 
@@ -404,11 +420,26 @@ def build_output_zip(
                 buf_orph.getvalue().encode("utf-8-sig"),
             )
 
+        # 3.b Drivers CSV (Jalon 5.1). Driver table is format-passthrough —
+        # a single ``drivers_tous.csv`` next to the master workbook. We write
+        # an internal helper column (``__source_file``) off before export so
+        # Revio's importer doesn't choke on an unknown column.
+        if driver_df is not None and not driver_df.empty:
+            driver_export = driver_df.copy()
+            if "__source_file" in driver_export.columns:
+                driver_export = driver_export.drop(columns=["__source_file"])
+            zf.writestr(
+                f"{root}/drivers/drivers_tous.csv",
+                revio_csv_bytes(driver_export, "driver"),
+            )
+
         # 4. Report / errors xlsx — passthroughs.
         if report_xlsx_bytes:
             zf.writestr(f"{root}/rapport.xlsx", report_xlsx_bytes)
         if contract_errors_xlsx_bytes:
             zf.writestr(f"{root}/contracts_errors.xlsx", contract_errors_xlsx_bytes)
+        if driver_errors_xlsx_bytes:
+            zf.writestr(f"{root}/drivers_errors.xlsx", driver_errors_xlsx_bytes)
 
         # 5. Extra files (e.g. lineage sidecars _lineage/vehicle.parquet).
         if extra_files:
