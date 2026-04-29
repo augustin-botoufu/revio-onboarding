@@ -58,3 +58,76 @@ patterns:
         - '41982.24'
         - '42776.18'
         - '37533.89'
+    ayvens_etat_parc:
+      plate:
+        column: N° Immat
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - GM-508-NM
+        - GM-693-NT
+        - GM-100-NM
+      number:
+        column: N° Contrat
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - TX46290
+        - TX46332
+        - TX46289
+      durationMonths:
+        column: Durée contrat
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - '36'
+        - '36'
+        - '36'
+      startDate:
+        column: Date début contrat
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - '2023-03-31 00:00:00'
+        - '2023-04-28 00:00:00'
+        - '2023-03-28 00:00:00'
+      endDate:
+        column: Date fin contrat
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - '2026-03-31 00:00:00'
+        - '2026-04-28 00:00:00'
+        - '2026-03-28 00:00:00'
+      contractedMileage:
+        column: Km contrat
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - '90000'
+        - '90000'
+        - '75000'
+      maxMileage:
+        column: KM tech Max
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - '170000'
+        - '170000'
+        - '170000'
+      totalPrice:
+        column: Loyer périodique
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - '465.17'
+        - '551.7'
+        - '419.63'
+      maintenanceEnabled:
+        column: Maintenance souscrite
+        learned_on: '2026-04-29T12:32:41+00:00'
+        learned_by: unknown
+        sample_values:
+        - autre prestation maintenance
+        - autre prestation maintenance
+        - autre prestation maintenance
