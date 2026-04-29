@@ -41,3 +41,20 @@ patterns:
         - ''
         - Réseau prestataire Ayvens
         - Réseau prestataire Ayvens
+    ayvens_aen:
+      plate:
+        column: Immatriculation
+        learned_on: '2026-04-29T12:31:27+00:00'
+        learned_by: unknown
+        sample_values:
+        - HF-735-NH
+        - HF-399-YZ
+        - HH-684-RN
+      vehicleValue:
+        column: Prix achat net TTC
+        learned_on: '2026-04-29T12:31:27+00:00'
+        learned_by: unknown
+        sample_values:
+        - '41982.24'
+        - '42776.18'
+        - '37533.89'
