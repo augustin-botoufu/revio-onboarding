@@ -14,5 +14,25 @@
 #         columns_include: ["Immatriculation", "VIN"]
 #       created_at: "2026-04-21"
 #       created_by: "augustin@gorevio.co"
-
-patterns: []
+patterns:
+- id: agilauto_etat_de_parc
+  slug: autre_loueur_etat_parc
+  match:
+    filename_regex: (?i).*agilauto\ \-\ etat\ de\ parc.*
+    columns_include:
+    - Première mise en circulation
+    - Description du véhicule
+  column_mapping:
+    registrationPlate: Immat..1
+    parcEntryAt: Date de début
+    registrationIssueCountryCode: Pays
+    brand: Marque
+    model: Modèle
+    variant: Description du véhicule
+    motorisation: Énergie
+    co2gKm: Émissions de CO2
+    registrationIssueDate: Première mise en circulation
+    registrationVin: Numéro de série
+    registrationFiscalPower: Puissance fiscale
+    usage: Genre fiscal
+  created_at: '2026-04-29'
