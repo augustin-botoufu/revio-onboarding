@@ -40,6 +40,7 @@ from src import rules_io
 from src import contract_engine as ce
 from src import driver_engine as de
 from src import pdf_parser as pdfp
+from src import invoice_xlsx_parser as ixlsxp
 from src import unknown_columns as unkcol
 from src import learned_patterns as lp
 from src import github_sync as gh
@@ -1877,6 +1878,71 @@ def _render_engine_uploader() -> None:
                 "learned_mapping_applied_count": _lc_applied_pdf,
             }
             continue
+
+        # --- Etat des dépenses XLSX branch (Jalon 5.3.5) ---
+        # If the file is an XLSX whose first ~15 rows contain a header
+        # matching the « Etat des dépenses » fingerprint (Immatriculation
+        # + N° contrat + Date Facture + Libellé prestation + Montant HT),
+        # we parse it via ``invoice_xlsx_parser`` instead of the generic
+        # ``load_tabular`` flow. The parser produces a DataFrame in the
+        # same shape as ``pdf_parser.parse_factures_to_dataframe`` so we
+        # route the file to the existing ``*_facture_pdf`` slug — all the
+        # YAML rules already declared for those slugs apply unchanged.
+        if lower.endswith((".xlsx", ".xls", ".xlsm")):
+            try:
+                import tempfile, os as _os
+                data = up.read() if hasattr(up, "read") else open(up, "rb").read()
+                # Reset the read pointer so the regular tabular branch
+                # below can re-read the file when this branch declines.
+                if hasattr(up, "seek"):
+                    up.seek(0)
+                with tempfile.NamedTemporaryFile(
+                    suffix=Path(filename).suffix, delete=False
+                ) as tf:
+                    tf.write(data)
+                    tmp_path = tf.name
+                try:
+                    invoice_df = ixlsxp.parse_etat_depenses_to_dataframe(
+                        [tmp_path], whitelist=whitelist, blacklist=blacklist,
+                    )
+                finally:
+                    try:
+                        _os.unlink(tmp_path)
+                    except Exception:
+                        pass
+            except Exception as e:
+                # Bad parse → fall through to the regular tabular branch.
+                invoice_df = None
+                # Don't surface the error — the file might just not be an
+                # « Etat des dépenses ». The regular tabular flow handles it.
+                _ = e
+
+            if invoice_df is not None and not invoice_df.empty:
+                lessor = ixlsxp.detect_lessor_from_filename(filename)
+                slug = ixlsxp.lessor_to_slug(lessor)
+                key = filename
+                _lc_applied = _apply_learned_columns(key, slug, invoice_df)
+                if _lc_applied:
+                    _learned_columns_hits.append(
+                        f"{filename} → {_lc_applied} champ(s)"
+                    )
+                new_files[key] = {
+                    "df": invoice_df,
+                    "filename": filename,
+                    "sheet_name": "",
+                    "slug": slug,
+                    "detected_type": slug,
+                    "detected_reason": (
+                        f"Etat des dépenses {lessor} (XLSX) — "
+                        f"{len(invoice_df)} contrat(s) extrait(s)."
+                    ),
+                    "is_pdf": False,
+                    "is_invoice_xlsx": True,
+                    "learned_match_id": None,
+                    "learned_match_hint": None,
+                    "learned_mapping_applied_count": _lc_applied,
+                }
+                continue
 
         # --- Tabular branch (CSV / XLSX) ---
         try:

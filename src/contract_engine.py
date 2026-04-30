@@ -573,15 +573,19 @@ def _postpass_isHT(
 ) -> None:
     """Resolve isHT: VP → FALSE (TTC) ; non-VP → TRUE (HT).
 
-    Priority per key (Jalon 4.2.10) :
+    Priority per key (Jalon 5.3.2 — reorder, démote api_plaques) :
       1. VP from the EP file where totalPrice came from (if known)
-      2. VP from api_plaques source (read directly by the Contract engine)
-      3. VP from vehicle_vp_by_plate (Vehicle engine result, fallback)
+      2. VP from vehicle_vp_by_plate (Vehicle engine result : reflète la
+         hiérarchie YAML ``usage`` — loueurs > client_file > api_plaques
+         depuis le 5.3.1)
+      3. VP from api_plaques source (read directly by the Contract engine,
+         dernier recours, biais constaté sur classification VP/VU)
 
-    The key addition in 4.2.10 is step 2 : on lit désormais ``api_plaques``
-    depuis le moteur Contract lui-même (via ``_extract_vp_from_api_plaques``).
-    Résultat : isHT se remplit même si l'utilisateur n'a pas cliqué
-    Appliquer sur l'onglet Véhicules avant l'onglet Contrats.
+    Avant 5.3.2 l'ordre était EP → api_plaques → Vehicle result. Le swap
+    apporte : si le moteur Vehicle a tourné, sa décision (qui inclut le
+    client_file en P2) prime sur la lecture api_plaques directe. Aligne
+    isHT avec la nouvelle hiérarchie usage en attendant changement de
+    provider SIV.
     """
     vp_from_api_by_key = vp_from_api_by_key or {}
     if "isHT" not in out_df.columns:
@@ -592,16 +596,16 @@ def _postpass_isHT(
         plate, _ = split_key(key)
         is_vp: Optional[bool] = None
         chosen_source = None
-        # 1. EP loueur
+        # 1. EP loueur — col VP/VU du fichier où on a trouvé totalPrice.
         if key in vp_from_ep_by_key:
             is_vp, chosen_source = vp_from_ep_by_key[key]
-        # 2. api_plaques directement (ne dépend pas du run Vehicle)
-        if is_vp is None and key in vp_from_api_by_key:
-            is_vp, chosen_source = vp_from_api_by_key[key]
-        # 3. Fallback Vehicle engine result (si run dans la même session)
+        # 2. Vehicle engine result (post-5.3.1: reflète loueurs>client>api).
         if is_vp is None and plate in vehicle_vp_by_plate:
             is_vp = vehicle_vp_by_plate[plate]
-            chosen_source = "api_plaque"
+            chosen_source = "vehicle_engine"
+        # 3. api_plaques en lecture directe (dernier recours).
+        if is_vp is None and key in vp_from_api_by_key:
+            is_vp, chosen_source = vp_from_api_by_key[key]
         if is_vp is None:
             continue
         is_ht = not bool(is_vp)

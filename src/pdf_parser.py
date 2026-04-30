@@ -313,6 +313,20 @@ def detect_lessor(text: str) -> str:
 # ---------- Rubriques classifier ----------
 
 
+def _strip_accents(s: str) -> str:
+    """ASCII-fold a string : « véhicule » → « vehicule ».
+
+    Used by :func:`classify_rubriques` so the same whitelist regex
+    matches both PDF labels (with accents) and XLSX exports
+    (uppercase, no accents — typical Ayvens « Etat des dépenses »
+    format) without us having to maintain accent-stripped variants
+    of every pattern.
+    """
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s)
+    return "".join(c for c in s if not unicodedata.combining(c))
+
+
 def classify_rubriques(
     rubriques: list[Rubrique],
     whitelist: list[dict],
@@ -323,20 +337,25 @@ def classify_rubriques(
 
     Match order: blacklist wins over whitelist (conservative: when in
     doubt, exclude). Within whitelist, the FIRST matching pattern wins.
+
+    Jalon 5.3.5 — labels are accent-stripped before matching so the
+    same regex hits both « véhicule de remplacement » (PDF) and
+    « VEHICULE REMPLACEMENT » (Ayvens XLSX export).
     """
-    compiled_white = [(re.compile(w["pattern"], re.I), w) for w in whitelist]
-    compiled_black = [(re.compile(b["pattern"], re.I), b) for b in blacklist]
+    compiled_white = [(re.compile(_strip_accents(w["pattern"]), re.I), w) for w in whitelist]
+    compiled_black = [(re.compile(_strip_accents(b["pattern"]), re.I), b) for b in blacklist]
     for r in rubriques:
         label = (r.label or "").strip()
         if not label:
             r.unknown = True
             continue
+        match_text = _strip_accents(label)
         # Blacklist first
-        if any(rx.search(label) for rx, _ in compiled_black):
+        if any(rx.search(match_text) for rx, _ in compiled_black):
             r.blacklisted = True
             continue
         # Whitelist
-        hit = next(((rx, meta) for rx, meta in compiled_white if rx.search(label)), None)
+        hit = next(((rx, meta) for rx, meta in compiled_white if rx.search(match_text)), None)
         if hit is None:
             r.unknown = True
             continue

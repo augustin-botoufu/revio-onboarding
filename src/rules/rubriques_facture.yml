@@ -6,9 +6,11 @@ whitelist:
     est noyé dans totalPrice).
 - pattern: \brc\b|responsabilité civile
   revio_field: civilLiabilityPrice
-- pattern: tous risques|multirisques|\bdommages\b|assurance auto
+- pattern: tous risques|multirisques|\bdommages\b|assurance auto|\bassurance\b
   revio_field: allRisksPrice
-  note: 'Ex. Arval : ''Assurance Auto Multirisques'''
+  note: 'Ex. Arval : ''Assurance Auto Multirisques''. Le mot ''assurance''
+    seul (XLSX Ayvens « Etat des dépenses ») est mappé ici par défaut faute
+    de granularité dans l''export.'
 - pattern: bris de glace|\bvol\b|\bincendie\b|vol[- ]?incendie
   revio_field: theftFireAndGlassPrice
 - pattern: perte financière|perte financiere
@@ -18,8 +20,9 @@ whitelist:
 - pattern: \bentretien\b|\bmaintenance\b
   revio_field: maintenancePrice
   note: Hors 'aucune prestation'
-- pattern: véhicule de remplacement|voiture de remplacement|\bvr\b
+- pattern: véhicule de remplacement|voiture de remplacement|véhicule remplacement|\bvr\b
   revio_field: replacementVehiclePrice
+  note: 'Inclut « VEHICULE REMPLACEMENT » sans préposition (XLSX Ayvens).'
 - pattern: \bpneu\b|pneumatique
   revio_field: tiresPrice
   note: Hors 'hors avenant' / 'crevaison' (= exceptionnel)
@@ -86,3 +89,17 @@ blacklist:
   note: Relance impayé
 - pattern: \bsolde\b
   note: Solde de régularisation
+# Jalon 5.3.5 — labels typiques des XLSX « Etat des dépenses » Ayvens
+# (frais one-off à exclure du totalPrice mensuel récurrent).
+- pattern: frais a l'acte|frais à l'acte
+  note: Frais ponctuels à l'acte
+- pattern: frais divers
+  note: idem
+- pattern: frais remise en etat|frais remise en état
+  note: idem (alias de remise en état)
+- pattern: remboursement
+  note: Remboursement ponctuel
+- pattern: \bcarburant\b
+  note: Conso carburant — facturée à part de la redevance carte (déjà couvert
+    par les patterns existants mais le label « CARBURANT » seul apparaît dans
+    Ayvens XLSX).

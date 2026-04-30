@@ -788,10 +788,11 @@ fields:
     description: RC activée ?
     enum: TRUE / FALSE
     notes: TRUE si civilLiabilityPrice > 0
+    # Jalon 5.3.4 — source_label parlant (au lieu du brut "rule").
     rules:
     - priority: 1
       source: rule
-      source_label: rule
+      source_label: ⚙️ Calculé depuis civilLiabilityPrice > 0
       transform: rule_price_positive
       column: civilLiabilityPrice > 0
   legalProtectionEnabled:
@@ -803,7 +804,7 @@ fields:
     rules:
     - priority: 1
       source: rule
-      source_label: rule
+      source_label: ⚙️ Calculé depuis legalProtectionPrice > 0
       transform: rule_price_positive
       column: legalProtectionPrice > 0
   theftFireAndGlassEnabled:
@@ -815,7 +816,7 @@ fields:
     rules:
     - priority: 1
       source: rule
-      source_label: rule
+      source_label: ⚙️ Calculé depuis theftFireAndGlassPrice > 0
       transform: rule_price_positive
       column: theftFireAndGlassPrice > 0
   allRisksEnabled:
@@ -827,7 +828,7 @@ fields:
     rules:
     - priority: 1
       source: rule
-      source_label: rule
+      source_label: ⚙️ Calculé depuis allRisksPrice > 0
       transform: rule_price_positive
       column: allRisksPrice > 0
   financialLossEnabled:
@@ -839,7 +840,7 @@ fields:
     rules:
     - priority: 1
       source: rule
-      source_label: rule
+      source_label: ⚙️ Calculé depuis financialLossPrice > 0
       transform: rule_price_positive
       column: financialLossPrice > 0
   maintenanceEnabled:
@@ -848,7 +849,17 @@ fields:
     description: Entretien activé ?
     enum: TRUE / FALSE
     notes: 'Ayvens EP: TRUE si « Maintenance souscrite » non vide'
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint : Arval EP n'a pas
+    # de nom de colonne stable pour cette info (parfois absente). Le flow
+    # « colonne non identifiée » propose le mapping à l'AM ; quand la
+    # colonne n'existe pas, l'AM laisse vide et la P2 prend le relais.
     rules:
+    - priority: 1
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column_hint: à mapper manuellement (col loueur variable selon contrat)
+      transform: rule_field_present
+      note: TRUE si ≠ vide et ≠ 'aucune prestation'
     - priority: 1
       source: ayvens_etat_parc
       source_label: ayvens_etat_parc
@@ -873,7 +884,14 @@ fields:
     description: Réseau d'entretien.
     enum: any / specialist
     notes: 2 valeurs uniquement (corrigé v2)
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
     rules:
+    - priority: 1
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column_hint: à mapper manuellement (col loueur variable selon contrat)
+      transform: enum_mapping_2
+      note: Mapping → any / specialist
     - priority: 1
       source: ayvens_etat_parc
       source_label: ayvens_etat_parc
@@ -956,7 +974,14 @@ fields:
     description: Prestation pneus activée ?
     enum: TRUE / FALSE
     notes: TRUE si plaque dans un fichier Pneus
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
     rules:
+    - priority: 1
+      source: arval_pneus
+      source_label: Arval - Pneus
+      transform: rule_source_present
+      column_hint: à mapper manuellement (col loueur variable)
+      note: TRUE si plaque dans Arval Pneus (mapping manuel à l'upload)
     - priority: 1
       source: ayvens_pneus
       source_label: ayvens_pneus
@@ -980,7 +1005,14 @@ fields:
     description: Type de pneus couverts.
     enum: standard / winter / 4seasons
     notes: 3 valeurs (pas de 'summer' — confirmé Q4)
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
     rules:
+    - priority: 1
+      source: arval_pneus
+      source_label: Arval - Pneus
+      transform: enum_mapping_tires
+      column_hint: à mapper manuellement (col loueur variable)
+      note: Mapping → standard / winter / 4seasons
     - priority: 1
       source: ayvens_pneus
       source_label: ayvens_pneus
@@ -1046,7 +1078,14 @@ fields:
     description: Réseau pneumatique.
     enum: any / specialist
     notes: 2 valeurs uniquement
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
     rules:
+    - priority: 1
+      source: arval_pneus
+      source_label: Arval - Pneus
+      transform: enum_mapping_2
+      column_hint: à mapper manuellement (col loueur variable)
+      note: → any / specialist
     - priority: 1
       source: ayvens_pneus
       source_label: ayvens_pneus

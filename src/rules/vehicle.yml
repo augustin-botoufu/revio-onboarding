@@ -75,28 +75,25 @@ fields:
     - utility
     - service
     - private
+    # Jalon 5.3.1 (2026-04-29) — Reorder priorities. API Plaques (SIV)
+    # est globalement faux sur la classification VP/VU pour les flottes
+    # qu'on traite (constat Augustin sur TECHSELL). En attendant changement
+    # de provider SIV : loueurs (qui voient le vrai usage du contrat) >
+    # client_file (déclaratif) > api_plaques (fallback fiscal).
     rules:
     - priority: 1
-      source: api_plaques
-      source_label: API Plaques
-      column: genreVCGNGC
-      transform: map_siv_usage
-      transform_doc: 'Mapper codes SIV : VP→private, VU→utility, autres→service'
-      example: VP
-      note: Source fiscale officielle
-    - priority: 2
       source: arval_uat
       source_label: Arval - État de parc (UAT)
       transform: map_loueur_usage
       transform_doc: Mapper libellés loueur → utility/service/private
       note: Ex-æquo loueur. À compléter
-    - priority: 2
+    - priority: 1
       source: autre_loueur_etat_parc
       source_label: État de parc autre loueur
       transform: map_loueur_usage
       transform_doc: Mapper libellés loueur → utility/service/private
       note: Ex-æquo loueur. À compléter
-    - priority: 2
+    - priority: 1
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
       column: Genre
@@ -104,7 +101,7 @@ fields:
       transform_doc: Mapper libellés loueur → utility/service/private
       example: service
       note: Ex-æquo loueur
-    - priority: 3
+    - priority: 2
       source: client_file
       source_label: Fichier véhicules client (interne)
       column_hint: à mapper manuellement (fallback IA)
@@ -112,6 +109,14 @@ fields:
       transform_doc: Mapper libellés client → utility/service/private
       example: service
       note: Déclaratif client
+    - priority: 3
+      source: api_plaques
+      source_label: API Plaques
+      column: genreVCGNGC
+      transform: map_siv_usage
+      transform_doc: 'Mapper codes SIV : VP→private, VU→utility, autres→service'
+      example: VP
+      note: Fallback fiscal (provider SIV à changer — biais constaté sur classification VP/VU)
   parcEntryAt:
     mandatory: false
     description: Date d'entrée dans le parc du client
