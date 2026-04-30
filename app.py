@@ -47,7 +47,7 @@ from src import value_mappings as vm
 from src import ai_normalization as ain
 from src import fleet_segmentation as fseg
 from src import zip_writer as zw
-from src.excel_report import build_report_xlsx
+from src.excel_report import build_report_xlsx, build_contract_report_xlsx
 from src import auth as rv_auth
 from src.session_reset import reset_import_state
 
@@ -2307,7 +2307,11 @@ def _render_unified_download() -> None:
     contract_errors_bytes = None
     if c_result is not None:
         try:
-            contract_errors_bytes = _build_contract_errors_xlsx(c_result, client_name=client_name)
+            # Jalon 5.2.1 — parité Vehicle : grille (plaque, numéro) × 45 champs
+            # avec onglets source / anomalies / plaques_orphelines / issues.
+            contract_errors_bytes = build_contract_report_xlsx(
+                c_result, client_name=client_name
+            )
         except Exception as e:
             st.warning(f"Rapport Excel contrats indisponible : {e}")
 

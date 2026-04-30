@@ -1,26 +1,33 @@
-"""Build a 3-sheet Excel report from an EngineResult.
+"""Build a multi-sheet Excel audit report from an engine result.
 
-Sheets:
-1. `source` — plates (rows) × output fields (cols). Cell = display name of the
-   source that won for that cell (e.g. "SIV", "Ayvens - État de parc").
-   Empty cell means no source produced a value (the output cell is empty too).
-2. `anomalies` — same shape. Cell is filled ONLY when 2+ sources produced
-   DIFFERENT values for the same (plate, field). Format:
-       [gardé] SIV=105
-       vs Ayvens - État de parc=108
-   The winner is prefixed with [gardé].
-3. `plaques_orphelines` — plates found in lessor files but absent from the
-   client file, with the same columns as the main output + a `sources_found`
-   column listing the lessor slugs where each orphan was found.
+Two entry points :
 
-Public API:
-    build_report_xlsx(engine_result, client_name: str) -> bytes
+- :func:`build_report_xlsx` — Vehicle (3 sheets : ``source`` / ``anomalies``
+  / ``plaques_orphelines``). One leading column "plaque" per row.
+
+- :func:`build_contract_report_xlsx` — Contract (4 sheets : ``source`` /
+  ``anomalies`` / ``plaques_orphelines`` / ``issues``). Two leading
+  columns ("plaque" + "numéro") per row, since a contract is identified
+  by a (plate, contract number) pair even though the engine keys by plate
+  alone since Jalon 4.2.6. The 4th ``issues`` sheet keeps the long-form
+  global warnings that don't have a target cell (e.g. "135 plates with
+  multiple rows in ayvens_facture_pdf").
+
+Both reports share the same internal grid builders so the visual format
+is identical : ``source`` is a wide grid where every cell shows the slug
+that won that field, ``anomalies`` mirrors that grid but only the cells
+where 2+ sources produced different values get filled with
+``[gardé] X=val`` + ``vs Y=val`` (winner first), highlighted in yellow.
+
+Public API :
+    build_report_xlsx(engine_result, client_name: str = "client") -> bytes
+    build_contract_report_xlsx(engine_result, client_name: str, issues=...) -> bytes
 """
 
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -32,8 +39,11 @@ from openpyxl.utils import get_column_letter
 # manager knows) rather than "API Plaques" (internal nickname).
 SOURCE_DISPLAY_OVERRIDES: dict[str, str] = {
     "api_plaques": "SIV",
+    "api_plaque": "SIV",  # singular form used by some lineage records
     "__default__": "défaut",
     "__engine__": "moteur",
+    "rule_engine": "moteur",
+    "derived": "dérivé",
 }
 
 
@@ -80,70 +90,137 @@ def _autosize_columns(ws, max_width: int = 60) -> None:
         ws.column_dimensions[get_column_letter(col_idx)].width = width
 
 
-# ---------- Public API ----------
+# =============================================================================
+# Common styling
+# =============================================================================
+
+HEADER_FONT = Font(bold=True, color="FFFFFF")
+HEADER_FILL = PatternFill("solid", fgColor="305496")
+KEY_FONT = Font(bold=True)
+KEY_FILL = PatternFill("solid", fgColor="D9E1F2")
+CONFLICT_FILL = PatternFill("solid", fgColor="FFE699")
+WRAP_ALIGN = Alignment(wrap_text=True, vertical="top")
+CENTER_ALIGN = Alignment(horizontal="center", vertical="center")
 
 
-def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
-    """Build a 3-sheet Excel report from an EngineResult. Returns bytes."""
-    display_map = _build_source_display_map(engine_result.rules_yaml)
+def _safe_at(df, key, col):
+    """Return ``df.at[key, col]`` defensively (NaN/None → empty string).
 
-    df = engine_result.df
-    source_by_cell = engine_result.source_by_cell or {}
-    conflicts_by_cell = engine_result.conflicts_by_cell or {}
-    orphan_df = engine_result.orphan_df
+    Avoids the AttributeError class of bugs you get when ``key`` happens to
+    not be in the index of the orphan DF (mixed indexes are rare but happen).
+    """
+    if df is None or col not in df.columns:
+        return ""
+    if key not in df.index:
+        return ""
+    v = df.at[key, col]
+    if v is None:
+        return ""
+    if isinstance(v, float) and v != v:  # NaN
+        return ""
+    return v
 
-    wb = Workbook()
-    wb.remove(wb.active)
 
-    header_font = Font(bold=True, color="FFFFFF")
-    header_fill = PatternFill("solid", fgColor="305496")
-    plate_font = Font(bold=True)
-    plate_fill = PatternFill("solid", fgColor="D9E1F2")
-    conflict_fill = PatternFill("solid", fgColor="FFE699")
-    wrap_align = Alignment(wrap_text=True, vertical="top")
-    center_align = Alignment(horizontal="center", vertical="center")
+# =============================================================================
+# Generic grid sheet builders
+# =============================================================================
 
-    # ===== Sheet 1: source =====
-    ws_src = wb.create_sheet("source")
-    headers = ["plaque"] + list(df.columns)
-    ws_src.append(headers)
-    for c in ws_src[1]:
-        c.font = header_font
-        c.fill = header_fill
-        c.alignment = center_align
+def _row_leading_cells(df, key, key_columns: list[tuple[str, str]]) -> list:
+    """Compute the 1-or-N leading display cells for a row.
 
-    for plate_key in df.index:
-        plate_display = df.at[plate_key, "registrationPlate"] if "registrationPlate" in df.columns else plate_key
-        if plate_display is None or (isinstance(plate_display, float) and plate_display != plate_display):
-            plate_display = plate_key
-        row = [plate_display]
-        for field_name in df.columns:
-            src = source_by_cell.get((str(plate_key), field_name))
+    ``key_columns`` is a list of ``(header_label, source_column)`` pairs.
+    For each pair we look up ``df.at[key, source_column]``. The FIRST
+    column falls back to the index ``key`` when the value is missing
+    (we always want a row identifier visible in the leftmost cell).
+    Subsequent columns leave an empty cell when the source value is
+    missing — e.g. a contract row with no ``number`` shouldn't display
+    the plate key in the « numéro » column.
+    """
+    out = []
+    for idx, (_label, src_col) in enumerate(key_columns):
+        v = None
+        if src_col and src_col in df.columns and key in df.index:
+            v = df.at[key, src_col]
+        if v is None or (isinstance(v, float) and v != v):
+            out.append(key if idx == 0 else "")
+        else:
+            out.append(v)
+    return out
+
+
+def _write_source_sheet(
+    ws,
+    df,
+    *,
+    source_by_cell: dict,
+    display_map: dict,
+    key_columns: list[tuple[str, str]],
+    field_columns: list[str],
+) -> None:
+    """Render the wide « source » grid into ``ws``.
+
+    Cell value = display name of the slug that produced the winning value
+    for ``(key, field)``. Empty cell ⇒ no source produced anything (final
+    output cell is empty too).
+    """
+    headers = [label for label, _ in key_columns] + list(field_columns)
+    ws.append(headers)
+    for c in ws[1]:
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.alignment = CENTER_ALIGN
+
+    for key in df.index:
+        row = _row_leading_cells(df, key, key_columns)
+        for field_name in field_columns:
+            src = source_by_cell.get((str(key), field_name))
             row.append(_display(src, display_map) if src else "")
-        ws_src.append(row)
-        ws_src.cell(row=ws_src.max_row, column=1).font = plate_font
-        ws_src.cell(row=ws_src.max_row, column=1).fill = plate_fill
+        ws.append(row)
+        for col_idx in range(1, len(key_columns) + 1):
+            cell = ws.cell(row=ws.max_row, column=col_idx)
+            cell.font = KEY_FONT
+            cell.fill = KEY_FILL
 
-    ws_src.freeze_panes = "B2"
-    _autosize_columns(ws_src, max_width=40)
+    freeze_col = get_column_letter(len(key_columns) + 1)
+    ws.freeze_panes = f"{freeze_col}2"
+    _autosize_columns(ws, max_width=40)
 
-    # ===== Sheet 2: anomalies =====
-    ws_ano = wb.create_sheet("anomalies")
-    ws_ano.append(headers)
-    for c in ws_ano[1]:
-        c.font = header_font
-        c.fill = header_fill
-        c.alignment = center_align
 
+def _write_anomalies_sheet(
+    ws,
+    df,
+    *,
+    conflicts_by_cell: dict,
+    display_map: dict,
+    key_columns: list[tuple[str, str]],
+    field_columns: list[str],
+) -> int:
+    """Render the « anomalies » grid into ``ws``. Returns conflict count.
+
+    Cell is filled ONLY for ``(key, field)`` where 2+ sources produced
+    DIFFERENT values. Format::
+
+        [gardé] SIV=105
+        vs Ayvens - État de parc=108
+
+    The winning source is prefixed with ``[gardé]``. Conflict cells are
+    highlighted in yellow with wrap-text alignment so multi-line values
+    stay readable.
+    """
+    headers = [label for label, _ in key_columns] + list(field_columns)
+    ws.append(headers)
+    for c in ws[1]:
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.alignment = CENTER_ALIGN
+
+    n_kc = len(key_columns)
     anomaly_count = 0
-    for plate_key in df.index:
-        plate_display = df.at[plate_key, "registrationPlate"] if "registrationPlate" in df.columns else plate_key
-        if plate_display is None or (isinstance(plate_display, float) and plate_display != plate_display):
-            plate_display = plate_key
-        row = [plate_display]
+    for key in df.index:
+        row = _row_leading_cells(df, key, key_columns)
         row_has_conflict = False
-        for field_name in df.columns:
-            conflicts = conflicts_by_cell.get((str(plate_key), field_name))
+        for field_name in field_columns:
+            conflicts = conflicts_by_cell.get((str(key), field_name))
             if not conflicts:
                 row.append("")
                 continue
@@ -154,64 +231,258 @@ def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
             row.append("\n".join(lines))
             row_has_conflict = True
             anomaly_count += 1
-        ws_ano.append(row)
-        row_idx = ws_ano.max_row
-        ws_ano.cell(row=row_idx, column=1).font = plate_font
-        ws_ano.cell(row=row_idx, column=1).fill = plate_fill
+        ws.append(row)
+        row_idx = ws.max_row
+        for col_idx in range(1, n_kc + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.font = KEY_FONT
+            cell.fill = KEY_FILL
         if row_has_conflict:
-            for col_idx, field_name in enumerate(df.columns, start=2):
-                val = ws_ano.cell(row=row_idx, column=col_idx).value
+            for col_idx, _field_name in enumerate(field_columns, start=n_kc + 1):
+                val = ws.cell(row=row_idx, column=col_idx).value
                 if val:
-                    ws_ano.cell(row=row_idx, column=col_idx).alignment = wrap_align
-                    ws_ano.cell(row=row_idx, column=col_idx).fill = conflict_fill
+                    ws.cell(row=row_idx, column=col_idx).alignment = WRAP_ALIGN
+                    ws.cell(row=row_idx, column=col_idx).fill = CONFLICT_FILL
 
-    ws_ano.freeze_panes = "B2"
-    _autosize_columns(ws_ano, max_width=50)
+    freeze_col = get_column_letter(n_kc + 1)
+    ws.freeze_panes = f"{freeze_col}2"
+    _autosize_columns(ws, max_width=50)
 
     if anomaly_count == 0:
-        ws_ano.insert_rows(2)
-        ws_ano.cell(row=2, column=1).value = (
+        ws.insert_rows(2)
+        ws.cell(row=2, column=1).value = (
             "Aucune anomalie détectée : toutes les sources sont cohérentes entre elles."
         )
-        ws_ano.cell(row=2, column=1).font = Font(italic=True, color="666666")
-        ws_ano.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(headers))
-
-    # ===== Sheet 3: plaques_orphelines =====
-    ws_orp = wb.create_sheet("plaques_orphelines")
-    if orphan_df is None or orphan_df.empty:
-        ws_orp.cell(row=1, column=1).value = (
-            "Aucune plaque orpheline : toutes les plaques des fichiers loueurs sont "
-            "présentes dans le fichier client."
+        ws.cell(row=2, column=1).font = Font(italic=True, color="666666")
+        ws.merge_cells(
+            start_row=2, start_column=1,
+            end_row=2, end_column=len(headers),
         )
-        ws_orp.cell(row=1, column=1).font = Font(italic=True, color="666666")
-        ws_orp.column_dimensions["A"].width = 100
-    else:
-        orphan_headers = ["plaque"] + list(orphan_df.columns)
-        ws_orp.append(orphan_headers)
-        for c in ws_orp[1]:
-            c.font = header_font
-            c.fill = header_fill
-            c.alignment = center_align
 
-        for plate_key in orphan_df.index:
-            plate_display = plate_key
-            if "registrationPlate" in orphan_df.columns:
-                rp = orphan_df.at[plate_key, "registrationPlate"]
-                if rp is not None and not (isinstance(rp, float) and rp != rp):
-                    plate_display = rp
-            row = [plate_display]
-            for field_name in orphan_df.columns:
-                v = orphan_df.at[plate_key, field_name]
-                if v is None or (isinstance(v, float) and v != v):
-                    row.append("")
-                else:
-                    row.append(v)
-            ws_orp.append(row)
-            ws_orp.cell(row=ws_orp.max_row, column=1).font = plate_font
-            ws_orp.cell(row=ws_orp.max_row, column=1).fill = plate_fill
+    return anomaly_count
 
-        ws_orp.freeze_panes = "B2"
-        _autosize_columns(ws_orp, max_width=40)
+
+def _write_orphans_sheet(
+    ws,
+    orphan_df,
+    *,
+    key_columns: list[tuple[str, str]],
+    empty_message: str = (
+        "Aucune plaque orpheline : toutes les plaques des fichiers loueurs sont "
+        "présentes dans le fichier client."
+    ),
+) -> None:
+    """Render orphans (rows present in lessor sources but absent from
+    client_file). Same leading columns as the main grid, then the raw
+    columns of ``orphan_df`` (no source attribution)."""
+    if orphan_df is None or orphan_df.empty:
+        ws.cell(row=1, column=1).value = empty_message
+        ws.cell(row=1, column=1).font = Font(italic=True, color="666666")
+        ws.column_dimensions["A"].width = 100
+        return
+
+    headers = [label for label, _ in key_columns] + list(orphan_df.columns)
+    ws.append(headers)
+    for c in ws[1]:
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.alignment = CENTER_ALIGN
+
+    n_kc = len(key_columns)
+    for key in orphan_df.index:
+        row = _row_leading_cells(orphan_df, key, key_columns)
+        for field_name in orphan_df.columns:
+            v = orphan_df.at[key, field_name]
+            if v is None or (isinstance(v, float) and v != v):
+                row.append("")
+            else:
+                row.append(v)
+        ws.append(row)
+        for col_idx in range(1, n_kc + 1):
+            cell = ws.cell(row=ws.max_row, column=col_idx)
+            cell.font = KEY_FONT
+            cell.fill = KEY_FILL
+
+    freeze_col = get_column_letter(n_kc + 1)
+    ws.freeze_panes = f"{freeze_col}2"
+    _autosize_columns(ws, max_width=40)
+
+
+def _write_issues_sheet(ws, issues: Optional[Iterable]) -> None:
+    """Render the long-form ``issues`` sheet for the Contract report.
+
+    ``issues`` is whatever the engine attached to ``result.issues`` —
+    usually a list of dataclass instances with attributes ``plate`` /
+    ``number`` / ``field`` / ``source`` / ``warning``. We accept any iterable
+    of objects (or dicts) and pull the same five attributes via
+    ``getattr`` / ``.get`` so this works without coupling to a specific
+    type.
+    """
+    headers = ["plaque", "numéro", "field", "source", "avertissement"]
+    ws.append(headers)
+    for c in ws[1]:
+        c.font = HEADER_FONT
+        c.fill = HEADER_FILL
+        c.alignment = CENTER_ALIGN
+
+    n = 0
+    for i in (issues or []):
+        if isinstance(i, dict):
+            row = [
+                i.get("plate", ""),
+                i.get("number", ""),
+                i.get("field", ""),
+                i.get("source", ""),
+                i.get("warning", ""),
+            ]
+        else:
+            row = [
+                getattr(i, "plate", "") or "",
+                getattr(i, "number", "") or "",
+                getattr(i, "field", "") or "",
+                getattr(i, "source", "") or "",
+                getattr(i, "warning", "") or "",
+            ]
+        ws.append(row)
+        n += 1
+    if n == 0:
+        ws.cell(row=2, column=1).value = "Aucun avertissement transverse."
+        ws.cell(row=2, column=1).font = Font(italic=True, color="666666")
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(headers))
+
+    _autosize_columns(ws, max_width=80)
+
+
+# =============================================================================
+# Public API — Vehicle
+# =============================================================================
+
+def build_report_xlsx(engine_result, client_name: str = "client") -> bytes:
+    """Build a 3-sheet Excel report from a Vehicle EngineResult. Returns bytes.
+
+    Sheets : ``source`` / ``anomalies`` / ``plaques_orphelines``. One leading
+    column "plaque" per row (filled from ``df["registrationPlate"]``, fallback
+    to the index key).
+    """
+    display_map = _build_source_display_map(engine_result.rules_yaml)
+
+    df = engine_result.df
+    source_by_cell = engine_result.source_by_cell or {}
+    conflicts_by_cell = engine_result.conflicts_by_cell or {}
+    orphan_df = engine_result.orphan_df
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    key_columns = [("plaque", "registrationPlate")]
+    field_columns = list(df.columns)
+
+    _write_source_sheet(
+        wb.create_sheet("source"),
+        df,
+        source_by_cell=source_by_cell,
+        display_map=display_map,
+        key_columns=key_columns,
+        field_columns=field_columns,
+    )
+    _write_anomalies_sheet(
+        wb.create_sheet("anomalies"),
+        df,
+        conflicts_by_cell=conflicts_by_cell,
+        display_map=display_map,
+        key_columns=key_columns,
+        field_columns=field_columns,
+    )
+    _write_orphans_sheet(
+        wb.create_sheet("plaques_orphelines"),
+        orphan_df,
+        key_columns=key_columns,
+    )
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# =============================================================================
+# Public API — Contract (Jalon 5.2.1)
+# =============================================================================
+
+def build_contract_report_xlsx(
+    engine_result,
+    *,
+    client_name: str = "client",
+    issues: Optional[Iterable] = None,
+) -> bytes:
+    """Build a 4-sheet Excel report from a ContractEngineResult.
+
+    Sheets :
+
+    1. ``source``  — wide grid : ``(plaque, numéro)`` × all 45 contract
+       fields. Cell = slug that won that field. Empty cell ⇒ no source
+       produced anything (final cell is empty too).
+    2. ``anomalies`` — same grid shape ; only conflict cells filled with
+       ``[gardé] X=val \\n vs Y=val``.
+    3. ``plaques_orphelines`` — contracts in lessor sources but absent
+       from ``client_file``.
+    4. ``issues`` — long-form list of transverse warnings (e.g. "135 plates
+       with multiple rows in ayvens_facture_pdf"). One row per warning,
+       ``(plaque, numéro, field, source, message)`` columns.
+
+    The 2-leading-column shape (``plaque`` + ``numéro``) is the only
+    visible difference vs the Vehicle report — and necessary because a
+    single plate can carry several contracts (active + previous, or
+    inter-loueur).
+
+    ``issues`` defaults to ``engine_result.issues`` when not provided ;
+    pass an explicit iterable to override.
+    """
+    display_map = _build_source_display_map(getattr(engine_result, "rules_yaml", None))
+
+    df = engine_result.df
+    source_by_cell = engine_result.source_by_cell or {}
+    conflicts_by_cell = engine_result.conflicts_by_cell or {}
+    orphan_df = engine_result.orphan_df
+    if issues is None:
+        issues = getattr(engine_result, "issues", None) or []
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    # Contract DF has both ``plate`` (display, with hyphens) and ``number``.
+    # Index is the canonical plate key (post-Jalon 4.2.6 — plate-only keys).
+    key_columns = [("plaque", "plate"), ("numéro", "number")]
+    field_columns = list(df.columns)
+
+    _write_source_sheet(
+        wb.create_sheet("source"),
+        df,
+        source_by_cell=source_by_cell,
+        display_map=display_map,
+        key_columns=key_columns,
+        field_columns=field_columns,
+    )
+    _write_anomalies_sheet(
+        wb.create_sheet("anomalies"),
+        df,
+        conflicts_by_cell=conflicts_by_cell,
+        display_map=display_map,
+        key_columns=key_columns,
+        field_columns=field_columns,
+    )
+    _write_orphans_sheet(
+        wb.create_sheet("plaques_orphelines"),
+        orphan_df,
+        key_columns=key_columns,
+        empty_message=(
+            "Aucun contrat orphelin : tous les contrats des fichiers loueurs sont "
+            "rattachés à une plaque du fichier client."
+        ),
+    )
+    _write_issues_sheet(
+        wb.create_sheet("issues"),
+        issues,
+    )
 
     buf = BytesIO()
     wb.save(buf)

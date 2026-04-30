@@ -464,6 +464,74 @@ def _iso_to_date(s: Any) -> Optional[datetime]:
     return None
 
 
+# Order in which we try to attribute a partner to a row when several
+# lessor sources contain the same plate. Highest-priority slug wins.
+# This list is intentionally NOT exhaustive — only the slugs that uniquely
+# identify a lessor (Arval / Ayvens). ``autre_loueur_*`` slugs are skipped
+# because we don't know which actual partner they represent.
+_PARTNER_ATTRIBUTION_ORDER = (
+    # Arval — État de parc / facture data is the strongest signal.
+    "arval_uat", "arval_facture_pdf",
+    "arval_aen", "arval_tvu", "arval_and", "arval_pneus",
+    # Ayvens
+    "ayvens_etat_parc", "ayvens_facture_pdf",
+    "ayvens_aen", "ayvens_tvs", "ayvens_and", "ayvens_pneus",
+)
+
+
+def _postpass_resolve_partner_id(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    indexed_sources: dict[str, pd.DataFrame],
+    lineage: LineageStore,
+) -> None:
+    """Fill ``partnerId`` from the lessor slug whose source contains the row.
+
+    Jalon 5.2.2 — for each contract row, we walk
+    :data:`_PARTNER_ATTRIBUTION_ORDER` and pick the first slug that has
+    the row's plate key in its DataFrame. The matching partnerId UUID is
+    pulled from :func:`partners.resolve_partner_id_for_slug`.
+
+    Why a post-pass and not a YAML rule?
+    Because the YAML rules pre-Jalon-5.2 only knew how to read VALUES from
+    a source column — they couldn't say "use the SLUG as the value source".
+    The previous attempt declared ``source: backoffice`` with a marker
+    transform (``lookup_by_source_slug``) which never resolved → 100% of
+    contracts shipped without partnerId, blocking the Revio import.
+    """
+    if "partnerId" not in out_df.columns:
+        return
+    # Lazy import so partners.py stays decoupled from the engine.
+    from .partners import resolve_partner_id_for_slug
+    for key in out_df.index:
+        if not _is_null(out_df.at[key, "partnerId"]):
+            continue
+        chosen_slug = None
+        for slug in _PARTNER_ATTRIBUTION_ORDER:
+            df_src = indexed_sources.get(slug)
+            if df_src is None or df_src.empty:
+                continue
+            if key in df_src.index:
+                chosen_slug = slug
+                break
+        if chosen_slug is None:
+            continue
+        partner_id = resolve_partner_id_for_slug(chosen_slug)
+        if not partner_id:
+            continue
+        out_df.at[key, "partnerId"] = partner_id
+        source_by_cell[(key, "partnerId")] = chosen_slug
+        lineage.record(LineageRecord(
+            table="contract", key=key, field="partnerId",
+            value=partner_id, source_used=chosen_slug,
+            source_col=None, source_row=None, priority=1,
+            transform="lookup_by_source_slug",
+            rule_id=build_rule_id("contract", "partnerId", chosen_slug, 1),
+            conflicts_ignored=[],
+            notes=f"Résolu depuis le slug source ({chosen_slug}) via partners.SLUG_TO_PARTNER.",
+        ))
+
+
 def _postpass_compute_months(
     out_df: pd.DataFrame,
     source_by_cell: dict,
@@ -871,6 +939,10 @@ def apply_rules(
         vehicle_vp_by_plate, vp_from_ep, vp_from_api,
     )
     _postpass_compute_months(out_df, source_by_cell, lineage)
+    # Jalon 5.2.2 — resolve Revio partnerId UUID from the lessor slug
+    # whose source carries the row. Without this, partnerId stays empty
+    # and the contract can't be imported into Revio.
+    _postpass_resolve_partner_id(out_df, source_by_cell, indexed, lineage)
 
     out_df.index.name = "contract_key"
 

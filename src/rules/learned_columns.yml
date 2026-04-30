@@ -1,133 +1,19 @@
-patterns:
-  contract:
-    ayvens_pneus:
-      plate:
-        column: Immatriculation
-        learned_on: '2026-04-29T12:30:19+00:00'
-        learned_by: unknown
-        sample_values:
-        - HF-735-NH
-        - HF-399-YZ
-        - HH-684-RN
-      tiresAmount:
-        column: Pneus souscrits au contrat
-        learned_on: '2026-04-29T12:30:19+00:00'
-        learned_by: unknown
-        sample_values:
-        - '0'
-        - '6'
-        - '6'
-      tiresAmountUsed:
-        column: Pneus utilisés
-        learned_on: '2026-04-29T12:30:19+00:00'
-        learned_by: unknown
-        sample_values:
-        - '0'
-        - '0'
-        - '0'
-      tiresEnabled:
-        column: Pneus restants
-        learned_on: '2026-04-29T12:30:19+00:00'
-        learned_by: unknown
-        sample_values:
-        - '0'
-        - '6'
-        - '6'
-      tiresNetwork:
-        column: Réseau prestataire
-        learned_on: '2026-04-29T12:30:19+00:00'
-        learned_by: unknown
-        sample_values:
-        - ''
-        - Réseau prestataire Ayvens
-        - Réseau prestataire Ayvens
-    ayvens_aen:
-      plate:
-        column: Immatriculation
-        learned_on: '2026-04-29T12:31:27+00:00'
-        learned_by: unknown
-        sample_values:
-        - HF-735-NH
-        - HF-399-YZ
-        - HH-684-RN
-      vehicleValue:
-        column: Prix achat net TTC
-        learned_on: '2026-04-29T12:31:27+00:00'
-        learned_by: unknown
-        sample_values:
-        - '41982.24'
-        - '42776.18'
-        - '37533.89'
-    ayvens_etat_parc:
-      plate:
-        column: N° Immat
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - GM-508-NM
-        - GM-693-NT
-        - GM-100-NM
-      number:
-        column: N° Contrat
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - TX46290
-        - TX46332
-        - TX46289
-      durationMonths:
-        column: Durée contrat
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - '36'
-        - '36'
-        - '36'
-      startDate:
-        column: Date début contrat
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - '2023-03-31 00:00:00'
-        - '2023-04-28 00:00:00'
-        - '2023-03-28 00:00:00'
-      endDate:
-        column: Date fin contrat
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - '2026-03-31 00:00:00'
-        - '2026-04-28 00:00:00'
-        - '2026-03-28 00:00:00'
-      contractedMileage:
-        column: Km contrat
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - '90000'
-        - '90000'
-        - '75000'
-      maxMileage:
-        column: KM tech Max
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - '170000'
-        - '170000'
-        - '170000'
-      totalPrice:
-        column: Loyer périodique
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - '465.17'
-        - '551.7'
-        - '419.63'
-      maintenanceEnabled:
-        column: Maintenance souscrite
-        learned_on: '2026-04-29T12:32:41+00:00'
-        learned_by: unknown
-        sample_values:
-        - autre prestation maintenance
-        - autre prestation maintenance
-        - autre prestation maintenance
+# Learned column overrides — mappings persistés via le bouton "💾 Mémoriser
+# ce format" de l'onglet Contract (et plus tard Vehicle, si on unifie).
+#
+# Format (écrit par src/unknown_columns.py::register_learned_column) :
+#
+#   patterns:
+#     <table>:
+#       <source_slug>:
+#         <field_name>:
+#           column: <header_source_choisi_par_user>
+#           learned_on: <ISO-8601>
+#           learned_by: <email>
+#           sample_values: [<v1>, <v2>, <v3>]
+#
+# Ce fichier est DISTINCT de `learned_patterns.yml` (qui stocke les
+# signatures de détection de format Vehicle, format liste), pour éviter le
+# conflit de shape qui crashait Mémoriser en 4.2.7.
+
+patterns: {}

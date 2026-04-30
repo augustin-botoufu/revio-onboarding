@@ -60,6 +60,57 @@ PARTNERS: dict[str, dict] = {
 }
 
 
+# Mapping from engine source slug → partner key (Jalon 5.2.2).
+# Used by ``contract_engine._postpass_resolve_partner_id`` to fill the
+# Revio ``partnerId`` UUID for each contract row, based on which lessor
+# slug provided the contract data. ``None`` means "leave empty — let the
+# user fill it via mode dev" (typically for the autre_loueur_* slugs
+# where we don't know which actual lessor the file came from).
+SLUG_TO_PARTNER: dict[str, Optional[str]] = {
+    # Arval
+    "arval_uat":              "arval",
+    "arval_aen":              "arval",
+    "arval_tvu":              "arval",
+    "arval_and":              "arval",
+    "arval_pneus":            "arval",
+    "arval_facture_pdf":      "arval",
+    # Ayvens
+    "ayvens_etat_parc":       "ayvens",
+    "ayvens_aen":             "ayvens",
+    "ayvens_tvs":             "ayvens",
+    "ayvens_and":             "ayvens",
+    "ayvens_pneus":           "ayvens",
+    "ayvens_facture_pdf":     "ayvens",
+    # Autre loueur — unknown until the user labels it; we leave partnerId
+    # empty rather than guess, so the import doesn't silently use the
+    # wrong UUID.
+    "autre_loueur_etat_parc":   None,
+    "autre_loueur_aen":         None,
+    "autre_loueur_tvs":         None,
+    "autre_loueur_and":         None,
+    "autre_loueur_pneus":       None,
+    "autre_loueur_facture_pdf": None,
+}
+
+
+def resolve_partner_id_for_slug(slug: str) -> Optional[str]:
+    """Return the Revio partnerId UUID matching an engine source slug.
+
+    Returns ``None`` when the slug is unknown OR when the slug is a
+    deliberate « autre loueur » placeholder (we don't want to guess the
+    wrong partner there).
+    """
+    if not slug:
+        return None
+    partner_key = SLUG_TO_PARTNER.get(slug)
+    if not partner_key:
+        return None
+    info = PARTNERS.get(partner_key)
+    if not info:
+        return None
+    return info.get("partnerId") or None
+
+
 def resolve_partner_id(name: str) -> Optional[str]:
     """Return the Revio partnerId UUID for a lessor name, or None if unknown."""
     if not name:
