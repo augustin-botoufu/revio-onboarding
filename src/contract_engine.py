@@ -479,6 +479,91 @@ _PARTNER_ATTRIBUTION_ORDER = (
 )
 
 
+# Price fields that the invoice parsers (PDF + XLSX) expose with both
+# ``<field>_ht`` and ``<field>_ttc`` flavours alongside the engine-facing
+# ``<field>`` column. Used by :func:`_postpass_apply_ht_ttc_flavour` to
+# re-pick the right flavour PER CONTRACT once isHT has been resolved.
+_INVOICE_PRICE_FIELDS = (
+    "civilLiabilityPrice", "allRisksPrice", "theftFireAndGlassPrice",
+    "financialLossPrice", "legalProtectionPrice", "maintenancePrice",
+    "replacementVehiclePrice", "tiresPrice", "gasCardPrice", "tollCardPrice",
+    "totalPrice",
+)
+
+
+def _postpass_apply_ht_ttc_flavour(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    indexed_sources: dict[str, pd.DataFrame],
+    lineage: LineageStore,
+) -> None:
+    """Adjust each invoice-derived price to match the contract's isHT flag.
+
+    Jalon 5.3.6 — bug fix. The PDF parser and the « Etat des dépenses »
+    XLSX parser both pre-fill the engine-facing ``<field>`` column with
+    a SINGLE flavour for the whole DataFrame (TTC by default,
+    cf. ``assume_ttc``). Both parsers also expose the matching
+    ``<field>_ht`` and ``<field>_ttc`` columns. But ``isHT`` is decided
+    PER CONTRACT (resolved earlier by ``_postpass_isHT``) — some rows
+    are HT, some are TTC, so the global pre-fill was wrong half the time.
+
+    This post-pass walks every row, looks up the source slug that
+    posted each price, and overwrites ``<field>`` with the value from
+    the matching flavoured column (``<field>_ht`` if ``isHT=True``,
+    ``<field>_ttc`` otherwise). Lineage is updated with an « adjusted »
+    record so the audit trail is preserved.
+    """
+    if "isHT" not in out_df.columns:
+        return
+    facture_slugs = _PARSER_DF_SOURCES
+    for key in out_df.index:
+        is_ht_val = out_df.at[key, "isHT"]
+        if _is_null(is_ht_val):
+            continue
+        # Coerce string "TRUE"/"FALSE" → bool so we never accidentally
+        # treat "False" as truthy (Python pitfall : ``bool("False")`` is True).
+        if isinstance(is_ht_val, str):
+            is_ht = is_ht_val.strip().upper() == "TRUE"
+        else:
+            is_ht = bool(is_ht_val)
+        suffix = "_ht" if is_ht else "_ttc"
+        for field in _INVOICE_PRICE_FIELDS:
+            if field not in out_df.columns:
+                continue
+            src = source_by_cell.get((key, field))
+            if src not in facture_slugs:
+                continue
+            src_df = indexed_sources.get(src)
+            if src_df is None or src_df.empty or key not in src_df.index:
+                continue
+            flavoured_col = field + suffix
+            if flavoured_col not in src_df.columns:
+                continue
+            new_val = src_df.at[key, flavoured_col]
+            if _is_null(new_val):
+                continue
+            old_val = out_df.at[key, field]
+            # Use _values_differ to compare with float tolerance — avoids
+            # spurious lineage entries for round-tripped TTC=HT*1.0 cases.
+            if not _values_differ(old_val, new_val):
+                continue
+            out_df.at[key, field] = new_val
+            lineage.record(LineageRecord(
+                table="contract", key=key, field=field,
+                value=new_val, source_used=src,
+                source_col=flavoured_col, source_row=None,
+                priority=2,
+                transform=f"flavour_{suffix.strip('_')}",
+                rule_id=build_rule_id("contract", field, src, 2),
+                conflicts_ignored=[],
+                notes=(
+                    f"Ajusté à la flavour {suffix.strip('_').upper()} après "
+                    f"résolution isHT={is_ht}. Avant: {old_val!r}. "
+                    f"Source: {flavoured_col}."
+                ),
+            ))
+
+
 def _postpass_resolve_partner_id(
     out_df: pd.DataFrame,
     source_by_cell: dict,
@@ -943,6 +1028,9 @@ def apply_rules(
         vehicle_vp_by_plate, vp_from_ep, vp_from_api,
     )
     _postpass_compute_months(out_df, source_by_cell, lineage)
+    # Jalon 5.3.6 — adjust invoice-derived prices to match each contract's
+    # isHT (HT vs TTC). Must run AFTER _postpass_isHT.
+    _postpass_apply_ht_ttc_flavour(out_df, source_by_cell, indexed, lineage)
     # Jalon 5.2.2 — resolve Revio partnerId UUID from the lessor slug
     # whose source carries the row. Without this, partnerId stays empty
     # and the contract can't be imported into Revio.
