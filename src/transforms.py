@@ -385,12 +385,47 @@ def map_loueur_usage(v: Any) -> Tuple[Optional[str], list[Warning]]:
     return None, warnings
 
 
+# Match a cell whose entire content is a seat count, with or without
+# the suffix « places / pl / sièges / seats ». Anchored to ^...$ so
+# « Boîte 5 vitesses » or « 12 RUE … » never match.
+import re as _re_seat
+_SEAT_COUNT_RE = _re_seat.compile(
+    r"^\s*(\d+)(?:\s*(?:places?|pl\.?|sieges?|sièges?|seats?))?\s*$",
+    _re_seat.IGNORECASE,
+)
+
+
 def map_client_usage(v: Any) -> Tuple[Optional[str], list[Warning]]:
-    """Libellés libres client -> Revio. Tolérant + fallback sur 'service'."""
+    """Libellés libres client -> Revio. Tolérant + fallback sur 'service'.
+
+    Jalon 5.3.12 — seat-count shortcut : when the cell contains only a
+    number of seats (`2`, `5`, `2 places`, `5 sièges`, …) we infer
+    the usage. 2 = banquette condamnée = VS (Véhicule de Société) →
+    fiscalement HT → ``service``. 5 = berline standard = VP →
+    fiscalement TTC → ``private``. Other counts (4, 7, 9, …) raise a
+    warning so the engine falls through to the next priority — they're
+    too ambiguous to commit to a value automatically.
+    """
     warnings: list[Warning] = []
     if _is_empty(v):
         return None, warnings
     s = str(v).strip().lower()
+
+    # Seat-count branch (Jalon 5.3.12). Anchored regex so we don't
+    # confuse "5 places" (here) with "Boîte 5 vitesses" (free-form
+    # mention of a 5-speed gearbox).
+    m = _SEAT_COUNT_RE.match(s)
+    if m:
+        n = int(m.group(1))
+        if n == 2:
+            return "service", warnings   # VS — fiscalement HT
+        if n == 5:
+            return "private", warnings   # VP — fiscalement TTC
+        warnings.append(
+            f"Nombre de places {n} non décisif (ni 2 ni 5) — usage à confirmer."
+        )
+        return None, warnings
+
     if any(k in s for k in ["particulier", "personnel", "privé", "private"]):
         return "private", warnings
     if any(k in s for k in ["utilitaire", "utility", "fourgon", "camionnette", "van"]):
