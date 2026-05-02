@@ -708,14 +708,54 @@ def _postpass_compute_enabled_from_presence(
     any of the dedicated sources for this Enabled field → True ;
     otherwise leave NaN (we don't post False because the absence might
     just mean « no Pneus file uploaded for this lessor »).
+
+    Jalon 5.3.15 — Refinement for ``tiresEnabled`` : when the matching
+    ``tiresAmount`` is **filled and equals 0**, we post FALSE instead
+    of TRUE. The plate appears in the Pneus file but with zero tires
+    subscribed = no tire service.
     """
     for enabled_field, slugs in _PRESENCE_TO_ENABLED_DERIVATION.items():
         if enabled_field not in out_df.columns:
             continue
+        # Find the matching « amount » field for this enabled (5.3.15) :
+        # currently only tiresEnabled has tiresAmount as its quantitative
+        # counterpart, but the structure is generic for future extensions.
+        amount_field = "tiresAmount" if enabled_field == "tiresEnabled" else None
+
         for key in out_df.index:
             current = out_df.at[key, enabled_field]
             if not _is_null(current):
                 continue
+
+            # 5.3.15 — tiresAmount=0 ⇒ FALSE (overrides the "presence
+            # implies TRUE" rule below).
+            if amount_field and amount_field in out_df.columns:
+                amount_raw = out_df.at[key, amount_field]
+                if not _is_null(amount_raw):
+                    try:
+                        amount_int = int(float(amount_raw))
+                    except (ValueError, TypeError):
+                        amount_int = None
+                    if amount_int is not None:
+                        new_val = amount_int > 0
+                        out_df.at[key, enabled_field] = new_val
+                        source_by_cell[(key, enabled_field)] = "rule_engine"
+                        lineage.record(LineageRecord(
+                            table="contract", key=key, field=enabled_field,
+                            value=new_val, source_used="rule_engine",
+                            source_col=f"{amount_field}={amount_int}",
+                            source_row=None, priority=99,
+                            transform="rule_amount_positive",
+                            rule_id=build_rule_id("contract", enabled_field, "rule_engine", 99),
+                            conflicts_ignored=[],
+                            notes=(
+                                f"Calculé depuis {amount_field}={amount_int} → "
+                                f"{'TRUE' if new_val else 'FALSE'}."
+                            ),
+                        ))
+                        continue
+
+            # Default rule : presence in any of the dedicated sources ⇒ TRUE.
             chosen_slug = None
             for slug in slugs:
                 src_df = indexed_sources.get(slug)
@@ -737,6 +777,149 @@ def _postpass_compute_enabled_from_presence(
                 conflicts_ignored=[],
                 notes=f"Plaque trouvée dans {chosen_slug} → TRUE.",
             ))
+
+
+# Jalon 5.3.15 — HT/TTC detection for client_file totalPrice.
+# We detect the flavour from (column name, raw cell value) using these
+# regexes. Word-boundary tricks avoid false positives like ``HTML``
+# (where ``HT`` is part of a longer alpha run) or ``HTTPS``.
+_FLAVOUR_HT_RE = _re_for_flavour = __import__("re").compile(
+    r"(?<![A-Z])HT(?![A-Z])|(?<![A-Z])H\.T\.?(?![A-Z])|HORS\s+TAXE",
+    __import__("re").IGNORECASE,
+)
+_FLAVOUR_TTC_RE = __import__("re").compile(
+    r"(?<![A-Z])TTC(?![A-Z])|(?<![A-Z])T\.T\.C\.?(?![A-Z])|TOUTES?\s+TAXES?\s+COMPRISES?",
+    __import__("re").IGNORECASE,
+)
+
+
+def _detect_price_flavour(col_name: Optional[str], raw_value: Any) -> Optional[str]:
+    """Return ``'ht'`` / ``'ttc'`` / None based on column name + raw value.
+
+    Looks for HT/TTC mentions both in the column header (typical
+    « Loyer mensuel HT ») and in the cell value itself (typical
+    « 59 € HT » or « 60 ttc »). When neither is present, returns None
+    and the caller falls back to the contract-level convention (VP=TTC,
+    VU=HT).
+    """
+    text = f"{col_name or ''} {raw_value if raw_value is not None else ''}"
+    # TTC checked first because « TTC » contains « T » which won't be
+    # falsely interpreted as HT, but a label like « HT/TTC » should
+    # surface BOTH and we want to err on the side of TTC (a more
+    # defensive default for the AM to spot-check). In practice the
+    # two regexes don't both match a clean label.
+    if _FLAVOUR_TTC_RE.search(text):
+        return "ttc"
+    if _FLAVOUR_HT_RE.search(text):
+        return "ht"
+    return None
+
+
+def _postpass_normalize_client_total_flavour(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    indexed_sources: dict[str, pd.DataFrame],
+    manual_column_overrides: dict,
+    lineage: LineageStore,
+    tva_rate: float = 0.20,
+) -> None:
+    """Detect the HT/TTC flavour of ``totalPrice`` rows posted by the
+    client_file, convert if it doesn't match the contract's isHT.
+
+    Jalon 5.3.15 — clients fill ``Loyer mensuel`` in their EP without a
+    standardised convention : sometimes HT, sometimes TTC, independent
+    of the VP/VU classification. This post-pass :
+
+    1. Scans ``totalPrice`` cells whose source is ``client_file``.
+    2. Detects the source flavour via :func:`_detect_price_flavour`
+       on (column name, raw cell value).
+    3. If undetected, falls back to « VP=TTC / VU=HT » based on isHT.
+    4. If the source flavour ≠ contract isHT, multiplies / divides by
+       ``(1 + tva_rate)`` to convert.
+
+    Note that the contract's ``isHT`` and the vehicle's ``usage`` are
+    NOT modified by this post-pass — only the totalPrice value.
+    """
+    if "totalPrice" not in out_df.columns or "isHT" not in out_df.columns:
+        return
+    client_df = indexed_sources.get("client_file")
+    if client_df is None or client_df.empty:
+        return
+
+    # Find the column that the engine read for totalPrice from
+    # client_file. Try the manual override first ; if absent, infer
+    # via the lineage records (source_col).
+    source_col_override = manual_column_overrides.get(("client_file", "totalPrice"))
+
+    factor = 1.0 + tva_rate
+    for key in out_df.index:
+        if source_by_cell.get((key, "totalPrice")) != "client_file":
+            continue
+        is_ht_val = out_df.at[key, "isHT"]
+        if _is_null(is_ht_val):
+            continue
+        if isinstance(is_ht_val, str):
+            target_is_ht = is_ht_val.strip().upper() == "TRUE"
+        else:
+            target_is_ht = bool(is_ht_val)
+
+        if key not in client_df.index:
+            continue
+
+        # Pick the column we read for this cell. Prefer the manual
+        # override ; otherwise scan the lineage records for the cell.
+        col = source_col_override
+        if not col:
+            for rec in lineage._records:
+                if (rec.key == key and rec.field == "totalPrice"
+                        and rec.source_used == "client_file" and rec.source_col):
+                    col = rec.source_col
+                    break
+        if not col or col not in client_df.columns:
+            continue
+
+        raw_value = client_df.at[key, col]
+        source_flavour = _detect_price_flavour(col, raw_value)
+        if source_flavour is None:
+            # Fallback to contract-level convention (VP=TTC / VU=HT).
+            source_flavour = "ht" if target_is_ht else "ttc"
+
+        # Already in the right flavour ? Nothing to convert.
+        if (source_flavour == "ht" and target_is_ht) or (
+            source_flavour == "ttc" and not target_is_ht
+        ):
+            continue
+
+        current = out_df.at[key, "totalPrice"]
+        if _is_null(current):
+            continue
+        try:
+            current_f = float(current)
+        except (ValueError, TypeError):
+            continue
+
+        # source HT, target TTC → multiply ; source TTC, target HT → divide.
+        if source_flavour == "ht" and not target_is_ht:
+            new_val = round(current_f * factor, 2)
+            direction = "HT→TTC"
+        else:  # source TTC, target HT
+            new_val = round(current_f / factor, 2)
+            direction = "TTC→HT"
+
+        out_df.at[key, "totalPrice"] = new_val
+        lineage.record(LineageRecord(
+            table="contract", key=key, field="totalPrice",
+            value=new_val, source_used="client_file",
+            source_col=col, source_row=None,
+            priority=99, transform="ht_ttc_convert_client",
+            rule_id=build_rule_id("contract", "totalPrice", "client_file", 99),
+            conflicts_ignored=[],
+            notes=(
+                f"Conversion client_file {direction} (TVA {tva_rate*100:.0f}%) — "
+                f"colonne « {col} », valeur brute {raw_value!r}, "
+                f"avant : {current_f:.2f}, après : {new_val:.2f}."
+            ),
+        ))
 
 
 def _postpass_resolve_partner_id(
@@ -1228,6 +1411,11 @@ def apply_rules(
     # Jalon 5.3.6 — adjust invoice-derived prices to match each contract's
     # isHT (HT vs TTC). Must run AFTER _postpass_isHT.
     _postpass_apply_ht_ttc_flavour(out_df, source_by_cell, indexed, lineage)
+    # Jalon 5.3.15 — totalPrice from client_file : detect HT/TTC from
+    # column header + cell value, convert if mismatch with isHT.
+    _postpass_normalize_client_total_flavour(
+        out_df, source_by_cell, indexed, manual_column_overrides, lineage,
+    )
     # Jalon 5.3.7 — derive *Enabled booleans from the matching *Price.
     # Must run AFTER the flavour fix so the price has its final value.
     _postpass_compute_enabled_from_price(out_df, source_by_cell, lineage)
