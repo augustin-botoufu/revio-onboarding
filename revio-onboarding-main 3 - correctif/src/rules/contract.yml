@@ -1,0 +1,1165 @@
+schema: contract
+version: 2
+description: Règles de mapping Contract — source de vérité pour le moteur. Généré
+  depuis spec_contract_v2.xlsx via gen_yaml.py. Clé primaire = (plate, number).
+primary_key:
+- plate
+- number
+fields:
+  plate:
+    mandatory: true
+    type: string
+    description: Plaque d'immatriculation du véhicule rattaché au contrat.
+    notes: 'Format FR attendu AB-123-CD après normalisation. Source EXCLUSIVE : fichier
+      client.'
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: normalize_plate
+      column: Plaque / Immatriculation
+      note: SOURCE EXCLUSIVE. Master list des plaques.
+    - priority: 99
+      source: arval_aen
+      source_label: arval_aen
+      transform: cross_check
+      column: Immat
+      note: idem
+    - priority: 99
+      source: arval_and
+      source_label: arval_and
+      transform: cross_check
+      column: IMMAT
+      note: idem
+    - priority: 99
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: cross_check
+      column: 'Ligne contrat : ''N° XXX - [PLAQUE] - …'''
+      note: idem
+    - priority: 99
+      source: arval_uat
+      source_label: arval_uat
+      transform: cross_check
+      column: Plaque d'immatriculation
+      note: idem
+    - priority: 99
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: cross_check
+      column: Immatriculation / Plaque / N° Immat
+      note: idem
+    - priority: 99
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: cross_check
+      column: Ligne contrat (regex générique)
+      note: idem
+    - priority: 99
+      source: ayvens_aen
+      source_label: ayvens_aen
+      transform: cross_check
+      column: Immatriculation
+      note: idem
+    - priority: 99
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: cross_check
+      column: N° Immat
+      note: Cross-check uniquement. Si plaque absente du client_file → fichier d'erreurs.
+    - priority: 99
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: cross_check
+      column: 'Ligne contrat : ''N° XXX - [PLAQUE] - …'''
+      note: idem — parsing regex
+    - priority: 99
+      source: ayvens_pneus
+      source_label: ayvens_pneus
+      transform: cross_check
+      column: Immatriculation
+      note: idem
+  plateCountry:
+    mandatory: true
+    type: string
+    description: Code ISO pays d'immatriculation.
+    notes: FR par défaut
+    rules:
+    - priority: 1
+      source: '*'
+      source_label: '*'
+      transform: const_FR
+      column: (constante)
+      note: Hardcodé FR tant qu'on n'a pas de clients étrangers
+  partnerId:
+    mandatory: true
+    type: uuid
+    description: UUID du loueur (ou prestataire) chez Revio — résolu par l'Index partnerId.
+    notes: Index à remplir par onglet Index partnerId
+    rules:
+    - priority: 1
+      source: backoffice
+      source_label: backoffice
+      transform: lookup_by_source_slug
+      column: Index partnerId (source → UUID)
+      note: 'Source slug → UUID via Index partnerId. Ex: ayvens_* → UUID Ayvens ;
+        autre_loueur_* → UUID saisi à l''upload.'
+  number:
+    mandatory: true
+    type: string
+    description: Numéro de contrat chez le loueur.
+    notes: Ex. TX43813 (Ayvens), 2141682 (Arval)
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: arval_uat
+      transform: strip
+      column: Numéro de contrat
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: strip
+      column: N° Contrat / Numéro contrat
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: strip
+      column: N° Contrat
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: regex_number
+      column: 'Ligne contrat : ''Contrat N° XXX - …'''
+      note: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: regex_number
+      column: Ligne contrat (regex)
+      note: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: regex_number
+      column: 'Ligne contrat : ''Contrat N° XXX - …'''
+      note: 'Regex : r''Contrat N°\s*(\d+)'''
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: strip
+      column: Numéro contrat / référence
+      note: Fallback
+  isHT:
+    mandatory: true
+    type: bool
+    description: Le contrat est-il exprimé Hors Taxes ?
+    enum: TRUE / FALSE
+    notes: 'Règle : VP → FALSE (TTC) ; non-VP → TRUE (HT). VP lu en PRIORITÉ dans
+      le fichier EP où on trouve le prix ; fallback API_Plaque si absent. Conflit
+      EP vs API_Plaque → NON logué Contract (déjà dans erreurs Vehicle).'
+    rules:
+    - priority: 1
+      source: ep_loueur
+      source_label: ep_loueur
+      transform: rule_isHT_from_VP_EP
+      column: Indication VP / non-VP du fichier EP utilisé
+      note: 'Priorité : VP lu dans l''EP où on trouve le prix. Si manquant → fallback
+        API_Plaque.'
+    - priority: 2
+      source: api_plaque
+      source_label: api_plaque
+      transform: rule_isHT_from_VP_API
+      column: Classification VP via API plaques (Vehicles)
+      note: Fallback si EP n'a pas l'info. Conflit EP↔API_Plaque NON logué Contract
+        (traité dans erreurs Vehicle).
+  durationMonths:
+    mandatory: true
+    type: int
+    description: Durée totale du contrat en mois.
+    notes: EP P1, facture P2, client_file P3, sinon dérivé de (endDate - startDate)
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: arval_uat
+      transform: int
+      column: Durée de contrat
+      note: En mois
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: int
+      column: Durée contrat / Durée (M)
+      note: En mois
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: int
+      column: Durée contrat
+      note: En mois. Source de vérité si renseigné.
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: regex_duration
+      column: 'Ligne contrat : ''60M/200000 Km'''
+      note: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: regex_duration
+      column: Ligne contrat (regex)
+      note: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: regex_duration
+      column: 'Ligne contrat : ''60M/200000 Km'''
+      note: 'Regex : r''(\d+)M/'''
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Durée contrat (mois)
+    - priority: 4
+      source: derived
+      source_label: (dérivé)
+      transform: compute_months
+      column: endDate - startDate
+      note: Fallback ultime si rien trouvé
+  startDate:
+    mandatory: true
+    type: date
+    description: Date de début de contrat.
+    notes: Format cible YYYY/MM/DD ; sources en DD/MM/YYYY ou ISO
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: arval_uat
+      transform: date_iso
+      column: DATE DE DEBUT DE CONTRAT
+      note: ISO déjà
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: date_any_to_iso
+      column: Date début contrat
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: date_fr_to_iso
+      column: Date début contrat
+      note: DD/MM/YYYY → YYYY/MM/DD
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: regex_start_date
+      column: Ligne 'Du DD/MM/YYYY au DD/MM/YYYY'
+      note: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: regex_start_date
+      column: Ligne période (regex)
+      note: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: regex_start_date
+      column: Ligne 'Du DD/MM/YYYY au DD/MM/YYYY'
+      note: Dans l'annexe, sous chaque contrat
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: date_any_to_iso
+      column: Date début contrat
+  endDate:
+    mandatory: true
+    type: date
+    description: Date de fin de contrat.
+    notes: idem
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: arval_uat
+      transform: date_iso
+      column: DATE DE FIN DE CONTRAT
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: date_any_to_iso
+      column: Date fin contrat
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: date_fr_to_iso
+      column: Date fin contrat
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: regex_restit_date
+      column: '''Date de restit. prévue : DD/MM/YYYY'''
+      note: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: regex_restit_date
+      column: Date restit. (regex)
+      note: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: regex_restit_date
+      column: '''Date de restit. prévue : DD/MM/YYYY'''
+      note: 'Regex : r''Date de restit\. prévue\s*:\s*(\d{2}/\d{2}/\d{4})'''
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: date_any_to_iso
+      column: Date fin contrat
+  contractedMileage:
+    mandatory: false
+    type: int
+    description: Kilométrage contractuel total.
+    notes: Ex. 120000
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: arval_uat
+      transform: int
+      column: Kilométrage
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: int
+      column: Km contrat / Kilométrage
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: int
+      column: Km contrat
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: regex_mileage
+      column: Ligne contrat
+      note: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: regex_mileage
+      column: Ligne contrat
+      note: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: regex_mileage
+      column: 'Ligne contrat : ''60M/200000 Km'''
+      note: 'Regex : r''\d+M/(\d+)\s*Km'''
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Km contractuel
+  maxMileage:
+    mandatory: false
+    type: int
+    description: Kilométrage maximum techniquement autorisé.
+    notes: 'Ayvens EP: KM tech Max (seul loueur à donner cette info)'
+    rules:
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: int
+      column: KM tech Max / Km max
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: int
+      column: KM tech Max
+      note: Ex. 180000 — souvent ~1.5× km contrat
+    - priority: 2
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Km max technique
+      note: Arval UAT et factures ne donnent pas cette info
+  extraKmPrice:
+    mandatory: false
+    type: float
+    description: Prix unitaire du km additionnel en fin de contrat.
+    notes: Client_file en priorité
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix km supplémentaire
+      note: Aucune source loueur fiable
+  vehicleValue:
+    mandatory: false
+    type: float
+    description: Prix du véhicule (obligatoire pour VP).
+    notes: Prix net remisé uniquement. JAMAIS 'Prix catalogue' ni 'Prix Véhicule TTC
+      brut'.
+    rules:
+    - priority: 0
+      source: arval_aen
+      source_label: arval_aen
+      transform: passthrough
+      column: Prix Véhicule TTC (NE JAMAIS PRENDRE)
+      banned: true
+      note: Valeur brute, pas la remise
+    - priority: 0
+      source: ayvens_aen
+      source_label: ayvens_aen
+      transform: passthrough
+      column: Prix catalogue (NE JAMAIS PRENDRE)
+      banned: true
+      note: Valeur catalogue brut, pas remisée
+    - priority: 1
+      source: arval_and
+      source_label: arval_and
+      transform: float_fr
+      column: Prix remisé TTC dont montant batterie TTC
+      note: Prendre toujours net remisé
+    - priority: 1
+      source: autre_loueur_and
+      source_label: autre_loueur_and
+      transform: float_fr
+      column: Prix remisé TTC
+      note: Prendre toujours net remisé
+    - priority: 1
+      source: ayvens_aen
+      source_label: ayvens_aen
+      transform: float_fr
+      column: Prix achat net TTC
+      note: Ex. 27132,31 — valeur NET remisée
+    - priority: 2
+      source: autre_loueur_aen
+      source_label: autre_loueur_aen
+      transform: float_fr
+      column: Prix achat net TTC / Prix véhicule TTC
+      note: Prendre toujours la valeur net remisée
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix véhicule
+  batteryValue:
+    mandatory: false
+    type: float
+    description: Valeur de la batterie pour VE.
+    notes: VE uniquement — déclenché via motorisation côté Vehicles. Dans tous les
+      AND (colonne à identifier).
+    rules:
+    - priority: 1
+      source: arval_and
+      source_label: arval_and
+      transform: float_fr
+      column: Montant de la batterie TTC
+      note: VE uniquement. Déclenché via motorisation côté Vehicles (Q8 ✓).
+    - priority: 1
+      source: autre_loueur_and
+      source_label: autre_loueur_and
+      transform: float_fr
+      column: Montant batterie TTC (ou équivalent)
+      note: idem pour tout autre loueur
+    - priority: 1
+      source: ayvens_and
+      source_label: ayvens_and
+      transform: float_fr
+      column: (colonne à identifier sur import VE)
+      note: 'Augustin confirme : l''info est quelque part, à localiser dès qu''un
+        VE sera présent dans un import Ayvens.'
+    - priority: 2
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Valeur batterie
+  civilLiabilityPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel RC.
+    notes: client_file P1, facture (rubrique RC) P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix RC mensuel
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique regex 'responsabilité civile|\bRC\b'
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique regex 'responsabilité civile|\bRC\b'
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique regex 'responsabilité civile|\bRC\b'
+      note: Whitelist
+  legalProtectionPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel protection juridique.
+    notes: client_file P1, facture P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix protection juridique
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'protection juridique'
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'protection juridique'
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'protection juridique'
+  theftFireAndGlassPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel vol / incendie / bris de glace.
+    notes: client_file P1, facture P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix vol/incendie/bris
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'bris de glace|vol|incendie'
+  allRisksPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel tous risques.
+    notes: client_file P1, facture (Assurance Auto Multirisques) P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix tous risques
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'Assurance Auto Multirisques'
+      note: Ex. 47.00 H.C.
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'tous risques|multirisques'
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'tous risques|multirisques|dommages'
+  financialLossPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel perte financière.
+    notes: client_file P1, facture P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix perte financière
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'perte financière'
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'perte financière'
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'perte financière'
+  maintenancePrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel entretien.
+    notes: client_file P1, facture P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix entretien mensuel
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'entretien|maintenance'
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'entretien|maintenance'
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'entretien|maintenance'
+      note: Hors 'aucune prestation'
+  replacementVehiclePrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel véhicule de remplacement.
+    notes: client_file P1, facture P2
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix VR mensuel
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'véhicule de remplacement|VR'
+  tiresPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel pneus.
+    notes: client_file P1, facture P2 (hors avenants exceptionnels)
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix pneus mensuel
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'pneu|pneumatique'
+      note: Hors 'hors avenant' / 'crevaison'
+  gasCardPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel carte carburant (redevance, pas la conso).
+    notes: facture P1 'Redevance carte carburant' (EXCLURE 'Charges carburant' = conso)
+    rules:
+    - priority: 1
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 1
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 1
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'carte carburant|redevance carburant'
+      note: EXCLURE 'charges carburant' = conso
+    - priority: 2
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix carte carburant mensuel
+  tollCardPrice:
+    mandatory: false
+    type: float
+    description: Prix mensuel télébadge (redevance, pas les péages consommés).
+    notes: facture P1 (EXCLURE 'Péage consommé')
+    rules:
+    - priority: 1
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 1
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: float_fr_rubrique
+      column: idem
+    - priority: 1
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: float_fr_rubrique
+      column: Rubrique 'télébadge|télépéage|redevance péage'
+      note: EXCLURE 'péage consommé'
+    - priority: 2
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Prix télébadge mensuel
+  totalPrice:
+    mandatory: false
+    type: float
+    description: Loyer mensuel total (toutes prestations incluses).
+    notes: EP P1 'Loyer périodique' ; facture P2 = Σ rubriques whitelist ; règle HT/TTC
+      selon isHT
+    rules:
+    - priority: 1
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: float_fr
+      column: Loyer périodique / Loyer mensuel
+      note: idem
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: float_fr
+      column: Loyer périodique
+      note: Mensualité (périodicité=M). Règle HT/TTC selon isHT.
+    - priority: 2
+      source: arval_facture_pdf
+      source_label: arval_facture_pdf
+      transform: sum_whitelist
+      column: Σ rubriques whitelist par contrat
+      note: idem
+    - priority: 2
+      source: autre_loueur_facture_pdf
+      source_label: autre_loueur_facture_pdf
+      transform: sum_whitelist
+      column: Σ rubriques whitelist
+      note: idem
+    - priority: 2
+      source: ayvens_facture_pdf
+      source_label: ayvens_facture_pdf
+      transform: sum_whitelist
+      column: Σ rubriques whitelist par contrat
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: float_fr
+      column: Loyer total mensuel
+  civilLiabilityEnabled:
+    mandatory: false
+    type: bool
+    description: RC activée ?
+    enum: TRUE / FALSE
+    notes: TRUE si civilLiabilityPrice > 0
+    # Jalon 5.3.4 — source_label parlant (au lieu du brut "rule").
+    rules:
+    - priority: 1
+      source: rule
+      source_label: ⚙️ Calculé depuis civilLiabilityPrice > 0
+      transform: rule_price_positive
+      column: civilLiabilityPrice > 0
+  legalProtectionEnabled:
+    mandatory: false
+    type: bool
+    description: Protection juridique activée ?
+    enum: TRUE / FALSE
+    notes: idem
+    rules:
+    - priority: 1
+      source: rule
+      source_label: ⚙️ Calculé depuis legalProtectionPrice > 0
+      transform: rule_price_positive
+      column: legalProtectionPrice > 0
+  theftFireAndGlassEnabled:
+    mandatory: false
+    type: bool
+    description: Vol/incendie/bris activé ?
+    enum: TRUE / FALSE
+    notes: idem
+    rules:
+    - priority: 1
+      source: rule
+      source_label: ⚙️ Calculé depuis theftFireAndGlassPrice > 0
+      transform: rule_price_positive
+      column: theftFireAndGlassPrice > 0
+  allRisksEnabled:
+    mandatory: false
+    type: bool
+    description: Tous risques activé ?
+    enum: TRUE / FALSE
+    notes: idem
+    rules:
+    - priority: 1
+      source: rule
+      source_label: ⚙️ Calculé depuis allRisksPrice > 0
+      transform: rule_price_positive
+      column: allRisksPrice > 0
+  financialLossEnabled:
+    mandatory: false
+    type: bool
+    description: Perte financière activée ?
+    enum: TRUE / FALSE
+    notes: idem
+    rules:
+    - priority: 1
+      source: rule
+      source_label: ⚙️ Calculé depuis financialLossPrice > 0
+      transform: rule_price_positive
+      column: financialLossPrice > 0
+  maintenanceEnabled:
+    mandatory: false
+    type: bool
+    description: Entretien activé ?
+    enum: TRUE / FALSE
+    notes: 'Ayvens EP: TRUE si « Maintenance souscrite » non vide'
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint : Arval EP n'a pas
+    # de nom de colonne stable pour cette info (parfois absente). Le flow
+    # « colonne non identifiée » propose le mapping à l'AM ; quand la
+    # colonne n'existe pas, l'AM laisse vide et la P2 prend le relais.
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column_hint: à mapper manuellement (col loueur variable selon contrat)
+      transform: rule_field_present
+      note: TRUE si ≠ vide et ≠ 'aucune prestation'
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: rule_field_present
+      column: Maintenance souscrite
+      note: TRUE si ≠ vide et ≠ 'aucune prestation'
+    - priority: 2
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: rule_field_present
+      column: Maintenance souscrite
+      note: idem
+    - priority: 3
+      source: rule
+      source_label: rule
+      transform: rule_price_positive
+      column: maintenancePrice > 0
+      note: Fallback
+  maintenanceNetwork:
+    mandatory: false
+    type: enum
+    description: Réseau d'entretien.
+    enum: any / specialist
+    notes: 2 valeurs uniquement (corrigé v2)
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
+    rules:
+    - priority: 1
+      source: arval_uat
+      source_label: Arval - État de parc (UAT)
+      column_hint: à mapper manuellement (col loueur variable selon contrat)
+      transform: enum_mapping_2
+      note: Mapping → any / specialist
+    - priority: 1
+      source: ayvens_etat_parc
+      source_label: ayvens_etat_parc
+      transform: enum_mapping_2
+      column: Maintenance souscrite
+      note: Mapping → any / specialist (2 valeurs seulement v2)
+    - priority: 2
+      source: autre_loueur_ep
+      source_label: autre_loueur_ep
+      transform: enum_mapping_2
+      column: Maintenance souscrite
+      note: idem
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: enum_mapping_2
+      column: Réseau entretien
+  replacementVehicleEnabled:
+    mandatory: false
+    type: bool
+    description: Véhicule de remplacement activé ?
+    enum: TRUE / FALSE
+    notes: client_file uniquement
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: bool_fr
+      column: VR activé
+      note: Q7 ✓
+  replacementVehicleCategory:
+    mandatory: false
+    type: enum
+    description: Catégorie du VR.
+    enum: A / B / C / D / E / F / G / H
+    notes: client_file uniquement (confirmé Q7)
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: enum_mapping
+      column: Catégorie VR
+      note: A à H — Q7 ✓
+  replacementVehicleDurationBreakdown:
+    mandatory: false
+    type: int
+    description: Durée VR en cas de panne (jours).
+    notes: client_file
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Durée VR panne
+  replacementVehicleDurationAccident:
+    mandatory: false
+    type: int
+    description: Durée VR en cas d'accident (jours).
+    notes: client_file
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Durée VR accident
+  replacementVehicleDurationTheft:
+    mandatory: false
+    type: int
+    description: Durée VR en cas de vol (jours).
+    notes: client_file
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Durée VR vol
+  tiresEnabled:
+    mandatory: false
+    type: bool
+    description: Prestation pneus activée ?
+    enum: TRUE / FALSE
+    notes: TRUE si plaque dans un fichier Pneus
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
+    rules:
+    - priority: 1
+      source: arval_pneus
+      source_label: Arval - Pneus
+      transform: rule_source_present
+      column_hint: à mapper manuellement (col loueur variable)
+      note: TRUE si plaque dans Arval Pneus (mapping manuel à l'upload)
+    - priority: 1
+      source: ayvens_pneus
+      source_label: ayvens_pneus
+      transform: rule_source_present
+      column: (ligne présente)
+      note: TRUE si plaque dans Ayvens Pneus
+    - priority: 2
+      source: autre_loueur_pneus
+      source_label: autre_loueur_pneus
+      transform: rule_source_present
+      column: (ligne présente)
+      note: idem
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: bool_fr
+      column: Pneus activés
+  tiresType:
+    mandatory: false
+    type: enum
+    description: Type de pneus couverts.
+    enum: standard / winter / 4seasons
+    notes: 3 valeurs (pas de 'summer' — confirmé Q4)
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
+    rules:
+    - priority: 1
+      source: arval_pneus
+      source_label: Arval - Pneus
+      transform: enum_mapping_tires
+      column_hint: à mapper manuellement (col loueur variable)
+      note: Mapping → standard / winter / 4seasons
+    - priority: 1
+      source: ayvens_pneus
+      source_label: ayvens_pneus
+      transform: enum_mapping_tires
+      column: Prestation souscrite
+      note: Mapping → standard / winter / 4seasons (Q4 ✓)
+    - priority: 2
+      source: autre_loueur_pneus
+      source_label: autre_loueur_pneus
+      transform: enum_mapping_tires
+      column: Prestation souscrite
+      note: idem
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: enum_mapping_tires
+      column: Type pneus
+  tiresAmount:
+    mandatory: false
+    type: int
+    description: Nombre de pneus souscrits.
+    notes: 'Ayvens Pneus : Pneus souscrits au contrat'
+    rules:
+    - priority: 1
+      source: ayvens_pneus
+      source_label: ayvens_pneus
+      transform: int
+      column: Pneus souscrits au contrat
+    - priority: 2
+      source: autre_loueur_pneus
+      source_label: autre_loueur_pneus
+      transform: int
+      column: Pneus souscrits
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Nb pneus souscrits
+  tiresAmountUsed:
+    mandatory: false
+    type: int
+    description: Nombre de pneus déjà utilisés.
+    notes: 'Ayvens Pneus : Pneus utilisés'
+    rules:
+    - priority: 1
+      source: ayvens_pneus
+      source_label: ayvens_pneus
+      transform: int
+      column: Pneus utilisés
+    - priority: 2
+      source: autre_loueur_pneus
+      source_label: autre_loueur_pneus
+      transform: int
+      column: Pneus utilisés
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: int
+      column: Nb pneus utilisés
+  tiresNetwork:
+    mandatory: false
+    type: enum
+    description: Réseau pneumatique.
+    enum: any / specialist
+    notes: 2 valeurs uniquement
+    # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
+    rules:
+    - priority: 1
+      source: arval_pneus
+      source_label: Arval - Pneus
+      transform: enum_mapping_2
+      column_hint: à mapper manuellement (col loueur variable)
+      note: → any / specialist
+    - priority: 1
+      source: ayvens_pneus
+      source_label: ayvens_pneus
+      transform: enum_mapping_2
+      column: Réseau prestataire
+      note: → any / specialist (Q5 ✓)
+    - priority: 2
+      source: autre_loueur_pneus
+      source_label: autre_loueur_pneus
+      transform: enum_mapping_2
+      column: Réseau prestataire
+    - priority: 3
+      source: client_file
+      source_label: client_file
+      transform: enum_mapping_2
+      column: Réseau pneus
+  gasCardEnabled:
+    mandatory: false
+    type: bool
+    description: Carte carburant activée ?
+    enum: TRUE / FALSE
+    notes: TRUE si rubrique 'Carte carburant' sur une facture OU 'Date dern. Carburant'
+      rempli sur EP
+    rules:
+    - priority: 1
+      source: rule
+      source_label: rule
+      transform: rule_or
+      column: gasCardPrice > 0 OR date_carburant présente
+      note: TRUE si rubrique carte carburant sur facture OU 'Date dern. Carburant'
+        EP
+    - priority: 2
+      source: client_file
+      source_label: client_file
+      transform: bool_fr
+      column: Carte carburant active
+  gasCardPartnerId:
+    mandatory: false
+    type: uuid
+    description: UUID du fournisseur de carte carburant.
+    notes: client_file ; nécessite Index partnerId
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: lookup_partner
+      column: Fournisseur carte carburant
+      note: Index partnerId (Total, Shell, DKV, BP, …)
+  tollCardEnabled:
+    mandatory: false
+    type: bool
+    description: Télébadge activé ?
+    enum: TRUE / FALSE
+    notes: TRUE si rubrique 'Télébadge/Télépéage' sur facture
+    rules:
+    - priority: 1
+      source: rule
+      source_label: rule
+      transform: rule_price_positive
+      column: tollCardPrice > 0
+    - priority: 2
+      source: client_file
+      source_label: client_file
+      transform: bool_fr
+      column: Télébadge actif
+  tollCardPartnerId:
+    mandatory: false
+    type: uuid
+    description: UUID du fournisseur de télébadge.
+    notes: client_file ; nécessite Index partnerId
+    rules:
+    - priority: 1
+      source: client_file
+      source_label: client_file
+      transform: lookup_partner
+      column: Fournisseur télébadge
+      note: Index partnerId (Ulys, Bip&Go, Axxès, …)

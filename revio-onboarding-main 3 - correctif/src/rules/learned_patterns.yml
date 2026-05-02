@@ -1,0 +1,18 @@
+# Patterns de détection appris — complétés manuellement après classification
+# d'un format inconnu. Voir src/learned_patterns.py pour le format attendu.
+#
+# Chaque entrée représente la signature d'un format de fichier (nom + colonnes
+# caractéristiques) et indique à quel slug YAML le rattacher.
+#
+# Exemple :
+#   patterns:
+#     - id: "alphabet_etat_parc"
+#       slug: "autre_loueur_etat_parc"
+#       loueur_hint: "Alphabet"
+#       match:
+#         filename_regex: "(?i).*alphabet.*etat.*parc.*"
+#         columns_include: ["Immatriculation", "VIN"]
+#       created_at: "2026-04-21"
+#       created_by: "augustin@gorevio.co"
+
+patterns: []

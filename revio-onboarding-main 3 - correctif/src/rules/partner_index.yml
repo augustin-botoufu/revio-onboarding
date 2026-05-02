@@ -1,0 +1,64 @@
+description: Index partagé des partnerId (loueurs, cartes carburant, télébadge). UUIDs
+  fournis par le backoffice Revio. Modifiable via UI ('+ Ajouter un partenaire') +
+  commit GitHub après validation.
+partners:
+- category: Loueur
+  slug: ayvens_*
+  label: Ayvens (ex-ALD)
+  partner_id: null
+  notes: Augustin fournira depuis le backoffice
+- category: Loueur
+  slug: arval_*
+  label: Arval
+  partner_id: null
+  notes: null
+- category: Loueur
+  slug: autre_loueur_* (à nommer)
+  label: Alphabet
+  partner_id: null
+  notes: null
+- category: Loueur
+  slug: autre_loueur_* (à nommer)
+  label: LeasePlan
+  partner_id: null
+  notes: null
+- category: Loueur
+  slug: autre_loueur_* (à nommer)
+  label: Athlon
+  partner_id: null
+  notes: null
+- category: Carte carburant
+  slug: null
+  label: Total
+  partner_id: null
+  notes: null
+- category: Carte carburant
+  slug: null
+  label: Shell
+  partner_id: null
+  notes: null
+- category: Carte carburant
+  slug: null
+  label: DKV
+  partner_id: null
+  notes: null
+- category: Carte carburant
+  slug: null
+  label: BP
+  partner_id: null
+  notes: null
+- category: Télébadge
+  slug: null
+  label: Ulys
+  partner_id: null
+  notes: null
+- category: Télébadge
+  slug: null
+  label: Bip & Go
+  partner_id: null
+  notes: null
+- category: Télébadge
+  slug: null
+  label: Axxès
+  partner_id: null
+  notes: null
