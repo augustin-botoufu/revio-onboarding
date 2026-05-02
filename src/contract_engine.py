@@ -564,6 +564,181 @@ def _postpass_apply_ht_ttc_flavour(
             ))
 
 
+# Mapping <Enabled field> → <Price field> for the « TRUE si Price > 0 »
+# derivation rule. Keep aligned with contract.yml — every entry here must
+# have a matching ``rule_price_positive`` rule in the YAML.
+_PRICE_TO_ENABLED_DERIVATION = {
+    "civilLiabilityEnabled":     "civilLiabilityPrice",
+    "legalProtectionEnabled":    "legalProtectionPrice",
+    "theftFireAndGlassEnabled":  "theftFireAndGlassPrice",
+    "allRisksEnabled":           "allRisksPrice",
+    "financialLossEnabled":      "financialLossPrice",
+    # maintenanceEnabled has rule_price_positive as P3 fallback after the
+    # loueur EP sources (P1/P2). Including it here mirrors the YAML.
+    "maintenanceEnabled":        "maintenancePrice",
+}
+
+
+def _postpass_compute_enabled_from_price(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    lineage: LineageStore,
+) -> None:
+    """Derive ``*Enabled`` booleans from the matching ``*Price`` field.
+
+    Jalon 5.3.7 — bug fix. The YAML declares 5 insurance ``*Enabled`` fields
+    (civilLiability / legalProtection / theftFireAndGlass / allRisks /
+    financialLoss) plus ``maintenanceEnabled`` (P3 fallback) with the rule
+    « TRUE si <field>Price > 0 ». The transform ``rule_price_positive`` is
+    listed as a marker passthrough in :func:`_apply_rule_transform` but no
+    post-pass ever computed the actual value. Result: even when the price
+    was correctly extracted from a facture, the matching Enabled stayed
+    empty — making the contract un-importable into Revio.
+
+    This post-pass walks each *Enabled in :data:`_PRICE_TO_ENABLED_DERIVATION`,
+    looks at the matching *Price column, and posts:
+      - ``True``   if Price > 0
+      - ``False``  if Price == 0
+      - leaves NaN if Price is NaN (we don't want to commit to either)
+
+    Lineage is updated with a ``rule_price_positive`` record citing the
+    source price and value, so the audit trail explains *why* each Enabled
+    has its value.
+
+    Must run AFTER :func:`_postpass_apply_ht_ttc_flavour` so the price has
+    its final flavoured value when we test it.
+    """
+    # First pass : normalise existing *Enabled values posted by
+    # ``rule_field_present`` (which is also a marker passthrough and leaves
+    # raw strings like « ENTRETIEN COURANT » in the cell — Revio expects
+    # TRUE / FALSE). We convert :
+    #   - empty string / None / NaN              → leave NaN
+    #   - "aucune prestation" (case-insensitive) → False
+    #   - any other non-empty string             → True
+    #   - bool values                            → kept as-is
+    _AUCUNE_RE = re.compile(r"aucune?\s+prestation", re.IGNORECASE)
+    for enabled_field in _PRICE_TO_ENABLED_DERIVATION.keys():
+        if enabled_field not in out_df.columns:
+            continue
+        for key in out_df.index:
+            current = out_df.at[key, enabled_field]
+            if isinstance(current, bool):
+                continue
+            if _is_null(current):
+                continue
+            s = str(current).strip()
+            if not s or s.lower() in {"nan", "none"}:
+                out_df.at[key, enabled_field] = None
+                continue
+            new_bool = not bool(_AUCUNE_RE.search(s))
+            if new_bool != current:
+                out_df.at[key, enabled_field] = new_bool
+                lineage.record(LineageRecord(
+                    table="contract", key=key, field=enabled_field,
+                    value=new_bool, source_used=source_by_cell.get((key, enabled_field), "rule_engine"),
+                    source_col=None, source_row=None,
+                    priority=1, transform="rule_field_present_normalised",
+                    rule_id=build_rule_id("contract", enabled_field,
+                                          source_by_cell.get((key, enabled_field), "rule_engine"), 1),
+                    conflicts_ignored=[],
+                    notes=(
+                        f"Marker rule_field_present normalisé: « {s} » → "
+                        f"{'TRUE' if new_bool else 'FALSE'} "
+                        f"(FALSE si label = « aucune prestation »)."
+                    ),
+                ))
+
+    for enabled_field, price_field in _PRICE_TO_ENABLED_DERIVATION.items():
+        if enabled_field not in out_df.columns:
+            continue
+        if price_field not in out_df.columns:
+            continue
+        for key in out_df.index:
+            current = out_df.at[key, enabled_field]
+            # Don't overwrite a value already posted by a higher-priority
+            # rule (e.g. ayvens_etat_parc « Maintenance souscrite »).
+            if not _is_null(current):
+                continue
+            price = out_df.at[key, price_field]
+            if _is_null(price):
+                continue
+            try:
+                price_val = float(price)
+            except (ValueError, TypeError):
+                continue
+            new_val = price_val > 0
+            out_df.at[key, enabled_field] = new_val
+            source_by_cell[(key, enabled_field)] = "rule_engine"
+            lineage.record(LineageRecord(
+                table="contract", key=key, field=enabled_field,
+                value=new_val, source_used="rule_engine",
+                source_col=f"{price_field} > 0", source_row=None,
+                priority=99, transform="rule_price_positive",
+                rule_id=build_rule_id("contract", enabled_field, "rule_engine", 99),
+                conflicts_ignored=[],
+                notes=(
+                    f"Calculé depuis {price_field}={price_val:.2f} → "
+                    f"{'TRUE' if new_val else 'FALSE'}."
+                ),
+            ))
+
+
+# Mapping <Enabled field> → list of source slugs that, if present for the
+# row's plate, mean the service is enabled. Mirrors the YAML
+# ``rule_source_present`` rules (where the rule is « TRUE si plaque
+# présente dans <source slug> »).
+_PRESENCE_TO_ENABLED_DERIVATION: dict[str, tuple[str, ...]] = {
+    "tiresEnabled": ("arval_pneus", "ayvens_pneus", "autre_loueur_pneus"),
+}
+
+
+def _postpass_compute_enabled_from_presence(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    indexed_sources: dict[str, pd.DataFrame],
+    lineage: LineageStore,
+) -> None:
+    """Derive ``*Enabled`` booleans from the presence of the plate in a
+    dedicated source (Pneus, etc.).
+
+    Jalon 5.3.7 — same class of bug as ``rule_price_positive`` : the
+    transform ``rule_source_present`` is declared in the YAML for
+    ``tiresEnabled`` but listed as a marker passthrough in the engine,
+    so nothing actually computed it. Fix : if the plate is present in
+    any of the dedicated sources for this Enabled field → True ;
+    otherwise leave NaN (we don't post False because the absence might
+    just mean « no Pneus file uploaded for this lessor »).
+    """
+    for enabled_field, slugs in _PRESENCE_TO_ENABLED_DERIVATION.items():
+        if enabled_field not in out_df.columns:
+            continue
+        for key in out_df.index:
+            current = out_df.at[key, enabled_field]
+            if not _is_null(current):
+                continue
+            chosen_slug = None
+            for slug in slugs:
+                src_df = indexed_sources.get(slug)
+                if src_df is None or src_df.empty:
+                    continue
+                if key in src_df.index:
+                    chosen_slug = slug
+                    break
+            if not chosen_slug:
+                continue
+            out_df.at[key, enabled_field] = True
+            source_by_cell[(key, enabled_field)] = chosen_slug
+            lineage.record(LineageRecord(
+                table="contract", key=key, field=enabled_field,
+                value=True, source_used=chosen_slug,
+                source_col="(plaque présente)", source_row=None,
+                priority=1, transform="rule_source_present",
+                rule_id=build_rule_id("contract", enabled_field, chosen_slug, 1),
+                conflicts_ignored=[],
+                notes=f"Plaque trouvée dans {chosen_slug} → TRUE.",
+            ))
+
+
 def _postpass_resolve_partner_id(
     out_df: pd.DataFrame,
     source_by_cell: dict,
@@ -1031,6 +1206,11 @@ def apply_rules(
     # Jalon 5.3.6 — adjust invoice-derived prices to match each contract's
     # isHT (HT vs TTC). Must run AFTER _postpass_isHT.
     _postpass_apply_ht_ttc_flavour(out_df, source_by_cell, indexed, lineage)
+    # Jalon 5.3.7 — derive *Enabled booleans from the matching *Price.
+    # Must run AFTER the flavour fix so the price has its final value.
+    _postpass_compute_enabled_from_price(out_df, source_by_cell, lineage)
+    # Jalon 5.3.7 — derive tiresEnabled from presence in pneus sources.
+    _postpass_compute_enabled_from_presence(out_df, source_by_cell, indexed, lineage)
     # Jalon 5.2.2 — resolve Revio partnerId UUID from the lessor slug
     # whose source carries the row. Without this, partnerId stays empty
     # and the contract can't be imported into Revio.
