@@ -1,116 +1,19 @@
-patterns:
-  contract:
-    ayvens_pneus:
-      plate:
-        column: Immatriculation
-        learned_on: '2026-05-02T22:12:23+00:00'
-        learned_by: unknown
-        sample_values:
-        - HA-802-JD
-        - HB-501-YG
-        - HB-457-DT
-      tiresAmount:
-        column: Pneus souscrits au contrat
-        learned_on: '2026-05-02T22:12:23+00:00'
-        learned_by: unknown
-        sample_values:
-        - '0'
-        - '0'
-        - '0'
-      tiresAmountUsed:
-        column: Pneus utilisés
-        learned_on: '2026-05-02T22:12:23+00:00'
-        learned_by: unknown
-        sample_values:
-        - '0'
-        - '0'
-        - '0'
-      tiresNetwork:
-        column: Réseau prestataire
-        learned_on: '2026-05-02T22:12:23+00:00'
-        learned_by: unknown
-        sample_values:
-        - ''
-        - ''
-        - ''
-      tiresEnabled:
-        column: Pneus souscrits au contrat
-        learned_on: '2026-05-02T22:12:23+00:00'
-        learned_by: unknown
-        sample_values:
-        - '0'
-        - '0'
-        - '0'
-    ayvens_etat_parc:
-      plate:
-        column: N° Immat
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - HA-802-JD
-        - HB-501-YG
-        - HB-457-DT
-      number:
-        column: N° Contrat
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - TW73687
-        - TW73689
-        - TW73690
-      durationMonths:
-        column: Durée contrat
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - '37'
-        - '37'
-        - '37'
-      startDate:
-        column: Date début contrat
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - '2024-12-23 00:00:00'
-        - '2024-02-26 00:00:00'
-        - '2025-01-14 00:00:00'
-      endDate:
-        column: Date fin contrat
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - '2028-01-23 00:00:00'
-        - '2027-03-26 00:00:00'
-        - '2028-02-14 00:00:00'
-      contractedMileage:
-        column: Km contrat
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - '115000'
-        - '115000'
-        - '115000'
-      maxMileage:
-        column: KM tech Max
-        learned_on: '2026-05-02T22:14:07+00:00'
-        learned_by: unknown
-        sample_values:
-        - '180000'
-        - '180000'
-        - '180000'
-      totalPrice:
-        column: Loyer périodique
-        learned_on: '2026-05-02T22:14:08+00:00'
-        learned_by: unknown
-        sample_values:
-        - '416.46'
-        - '416.46'
-        - '416.46'
-      maintenanceEnabled:
-        column: Maintenance souscrite
-        learned_on: '2026-05-02T22:14:08+00:00'
-        learned_by: unknown
-        sample_values:
-        - 'autre prestation maintenance                                                                        '
-        - 'autre prestation maintenance                                                                        '
-        - 'autre prestation maintenance                                                                        '
+# Learned column overrides — mappings persistés via le bouton "💾 Mémoriser
+# ce format" de l'onglet Contract (et plus tard Vehicle, si on unifie).
+#
+# Format (écrit par src/unknown_columns.py::register_learned_column) :
+#
+#   patterns:
+#     <table>:
+#       <source_slug>:
+#         <field_name>:
+#           column: <header_source_choisi_par_user>
+#           learned_on: <ISO-8601>
+#           learned_by: <email>
+#           sample_values: [<v1>, <v2>, <v3>]
+#
+# Ce fichier est DISTINCT de `learned_patterns.yml` (qui stocke les
+# signatures de détection de format Vehicle, format liste), pour éviter le
+# conflit de shape qui crashait Mémoriser en 4.2.7.
+
+patterns: {}
