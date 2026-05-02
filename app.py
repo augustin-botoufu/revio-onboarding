@@ -2625,6 +2625,23 @@ def _render_driver_tab_body(engine_files: dict) -> None:
             "tous les cas."
         )
 
+    # --- 2b. Pull contract startDates for assignFrom default (5.3.10) -----
+    c_result = st.session_state.get("contract_result")
+    contract_start_dates = de.extract_contract_start_dates(c_result)
+    if contract_start_dates:
+        st.caption(
+            f"🔗 Cross-table assignFrom : {len(contract_start_dates)} "
+            "startDate(s) récupérée(s) du moteur Contrats. Les drivers "
+            "sans `assignFrom` mais avec une plaque héritent de la "
+            "startDate de leur contrat."
+        )
+    else:
+        st.caption(
+            "🔗 Pas encore de résultat Contrats — `assignFrom` ne sera "
+            "pas auto-rempli depuis les contrats tant que le moteur "
+            "Contrats n'a pas tourné."
+        )
+
     # --- 3. Run button ---------------------------------------------------
     if st.button(
         "▶️ Appliquer les règles Drivers",
@@ -2634,7 +2651,11 @@ def _render_driver_tab_body(engine_files: dict) -> None:
     ):
         try:
             with st.spinner("Normalisation des drivers..."):
-                result = de.process_drivers(driver_df_raw, vehicle_plates=vehicle_plates)
+                result = de.process_drivers(
+                    driver_df_raw,
+                    vehicle_plates=vehicle_plates,
+                    contract_start_dates=contract_start_dates,
+                )
             st.session_state.driver_result = result
         except Exception as e:
             st.error(f"Erreur moteur Drivers : {e}")

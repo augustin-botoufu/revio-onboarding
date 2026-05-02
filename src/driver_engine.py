@@ -155,6 +155,42 @@ def _is_blank(v) -> bool:
     return s == "" or s.lower() == "nan"
 
 
+# Recognises common date formats. Used by :func:`_is_parseable_date`
+# below to distinguish a real date (valid → keep) from a free-form
+# string like « NC » / « Ancien permis » / « Pas de date » (invalid →
+# treat as blank and apply the default).
+_DATE_FORMATS = (
+    "%Y/%m/%d", "%Y-%m-%d", "%Y.%m.%d",
+    "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
+)
+
+
+def _is_parseable_date(v) -> bool:
+    """True iff ``v`` parses as a real date in one of the common formats.
+
+    Empty / NaN values return ``False`` (= we'll treat them as blank
+    upstream). Free-form text like « NC », « Ancien permis », « ? »,
+    « Pas de date » also returns ``False`` so the rule can apply the
+    default 2033/01/19.
+    """
+    if _is_blank(v):
+        return False
+    s = str(v).strip()
+    # Cheap pre-filter — if the string contains no digit at all, no
+    # format will ever parse it. Avoids 6 strptime attempts on each
+    # « NC » / « ? » / « Ancien permis ».
+    if not any(c.isdigit() for c in s):
+        return False
+    from datetime import datetime
+    for fmt in _DATE_FORMATS:
+        try:
+            datetime.strptime(s, fmt)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def apply_license_expiry_rule(
     license_number,
     license_expiry,
@@ -163,22 +199,31 @@ def apply_license_expiry_rule(
 ) -> str:
     """Apply the 2033/01/19 default when a driver has a licence but no expiry.
 
+    Jalon 5.3.10 — extended : the rule now ALSO fires when
+    ``license_expiry`` is non-empty but **isn't a parseable date**
+    (typical free-form values seen in the field : « NC »,
+    « Ancien permis », « Pas de date », « ? »). The protection on
+    ``license_number`` is preserved : we only impose the default if the
+    driver actually has a licence number — no licence ⇒ no expiry date.
+
     Behaviour (truth table) :
 
-    ======================  ==================  ===================
-    licenseNumber            licenseExpiryDate   Returned value
-    ======================  ==================  ===================
-    blank                    blank               "" (blank)
-    blank                    "2030/01/01"        "2030/01/01"
-    "120659501108"           blank               "2033/01/19"
-    "120659501108"           "2030/01/01"        "2030/01/01"
-    ======================  ==================  ===================
-
-    The ``default`` knob exists so we can lift the rule to a YAML override
-    later without touching the call sites.
+    ======================  =====================  ===================
+    licenseNumber            licenseExpiryDate     Returned value
+    ======================  =====================  ===================
+    blank                    blank                 "" (blank)
+    blank                    "NC"                  "" (blank — no licence)
+    blank                    "2030/01/01"          "2030/01/01"
+    "120659501108"           blank                 "2033/01/19"
+    "120659501108"           "NC"                  "2033/01/19" (5.3.10)
+    "120659501108"           "Ancien permis"       "2033/01/19" (5.3.10)
+    "120659501108"           "?"                   "2033/01/19" (5.3.10)
+    "120659501108"           "2030/01/01"          "2030/01/01"
+    ======================  =====================  ===================
     """
-    if not _is_blank(license_expiry):
+    if _is_parseable_date(license_expiry):
         return str(license_expiry).strip()
+    # license_expiry is blank OR garbage (non-date).
     if _is_blank(license_number):
         return ""
     return default
@@ -277,12 +322,75 @@ def is_driver_shape(columns: Iterable[str], *, min_hits: int = 4) -> bool:
     return hits >= min_hits
 
 
+def apply_assign_from_rule(
+    assign_from,
+    plate,
+    contract_start_dates: Optional[dict] = None,
+) -> str:
+    """Default ``assignFrom`` to the contract's ``startDate`` for the same plate.
+
+    Jalon 5.3.10 — when a driver is linked to a vehicle (``assignPlate``
+    rempli) but the form-filler left ``assignFrom`` blank, we reuse the
+    ``startDate`` of the matching contract. The mapping is built once
+    by the caller (``contract_start_dates: dict[plate_canonical, str]``)
+    so the Driver page doesn't need to remap plate sources — the
+    Contract engine already did the work.
+
+    Returns the original ``assign_from`` if it's already filled, OR
+    the contract's startDate if we have one for that plate, OR an
+    empty string if nothing matches.
+    """
+    if not _is_blank(assign_from):
+        return str(assign_from).strip()
+    if contract_start_dates is None or _is_blank(plate):
+        return ""
+    key = plate_key(plate)
+    if not key:
+        return ""
+    val = contract_start_dates.get(key)
+    if _is_blank(val):
+        return ""
+    return str(val).strip()
+
+
+def extract_contract_start_dates(contract_result) -> dict[str, str]:
+    """Return ``{canonical_plate: startDate}`` from a ContractEngineResult.
+
+    Helper for the UI : the Driver page calls this with the current
+    ``contract_result`` (or ``None``), gets a mapping, and feeds it to
+    :func:`process_drivers` as ``contract_start_dates``. We accept any
+    object that exposes ``df`` with ``plate`` and ``startDate`` columns
+    so this stays decoupled from the contract engine's exact dataclass.
+    """
+    out: dict[str, str] = {}
+    if contract_result is None:
+        return out
+    df = getattr(contract_result, "df", None)
+    if df is None or df.empty:
+        return out
+    if "plate" not in df.columns or "startDate" not in df.columns:
+        return out
+    for plate, start in zip(df["plate"].tolist(), df["startDate"].tolist()):
+        if _is_blank(start):
+            continue
+        key = plate_key(plate)
+        if not key:
+            continue
+        # First non-empty wins on duplicate plates (extremely rare since
+        # the contract engine already de-duplicates by plate).
+        if key in out:
+            continue
+        out[key] = str(start).strip()
+    return out
+
+
 def process_drivers(
     df: pd.DataFrame,
     *,
     vehicle_plates: Optional[Iterable[str]] = None,
+    contract_start_dates: Optional[dict] = None,
 ) -> DriverResult:
-    """Run the 3 normalisations + anomaly detection on a Driver DataFrame.
+    """Run the normalisations + anomaly detection on a Driver DataFrame.
 
     Parameters
     ----------
@@ -295,6 +403,13 @@ def process_drivers(
         raise an anomaly for each ``assignPlate`` not found there. Pass
         ``None`` when the Vehicle file isn't available — we just skip
         the "unknown plate" check then, but duplicates are still detected.
+    contract_start_dates
+        Optional ``{canonical_plate: startDate}`` mapping (typically
+        built by :func:`extract_contract_start_dates` from a
+        ContractEngineResult). When a driver row has ``assignPlate``
+        rempli but ``assignFrom`` vide, we fill ``assignFrom`` with
+        the contract's ``startDate``. Drivers without a plate are left
+        as-is (no date invented).
 
     Returns
     -------
@@ -335,6 +450,13 @@ def process_drivers(
         for ln, le in zip(out["licenseNumber"].tolist(), out["licenseExpiryDate"].tolist()):
             new_exp.append(apply_license_expiry_rule(ln, le))
         out["licenseExpiryDate"] = pd.Series(new_exp, index=out.index, dtype="object")
+
+    # --- assignFrom default from contract startDate (Jalon 5.3.10) -------
+    if "assignFrom" in out.columns and "assignPlate" in out.columns:
+        new_af: list[str] = []
+        for af, ap in zip(out["assignFrom"].tolist(), out["assignPlate"].tolist()):
+            new_af.append(apply_assign_from_rule(af, ap, contract_start_dates))
+        out["assignFrom"] = pd.Series(new_af, index=out.index, dtype="object")
 
     # --- Assign-plate anomalies ------------------------------------------
     if "assignPlate" in out.columns:
