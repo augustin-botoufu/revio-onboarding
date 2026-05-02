@@ -1010,36 +1010,58 @@ def _extract_vp_from_ep_sources(
         "genre", "type véhicule", "type vehicule", "catégorie", "categorie",
         "vp/vu", "vp / vu", "vehicle_type", "type de véhicule", "type de vehicule",
         "classification", "nature du véhicule", "nature du vehicule",
+        # Jalon 5.3.8 — Ayvens utilise « Carrosserie » comme fallback,
+        # avec valeurs comme « Berline VU 5 po » qui portent le code VU.
+        "carrosserie",
     )
     # Substrings — on matche si l'un est présent dans la valeur normalisée.
     VP_VALUE_HINTS = ("vp", "particul", "tourisme")
-    VU_VALUE_HINTS = ("vu", "utilit", "commercial", "pl", "camion", "fourgon")
+    # Jalon 5.3.8 — codes terrain qui désignent un VU fiscalement :
+    #   VS    = Véhicule de Société (Ayvens)
+    #   CTTE  = Camionnette (SIV)
+    #   VASP  = Véhicule Automoteur Spécialisé Professionnel
+    #   DERIV = Dérivé VP (fiscalement utilitaire dans la majorité des cas)
+    # Sans ces codes, FK-354-ZK (Genre='VS') tombait en fallback sur
+    # api_plaques (qui dit VP à tort) → isHT mal résolu.
+    VU_VALUE_HINTS = (
+        "vu", "utilit", "commercial", "pl", "camion", "fourgon",
+        "vs", "ctte", "vasp", "deriv",
+    )
 
-    def _find_vp_col(df: pd.DataFrame) -> Optional[str]:
+    # Order of column preference: try the most explicit (Genre, Type véhicule,
+    # ...) before falling back to Carrosserie which is more verbose but less
+    # consistent. This is just preference order — we still scan all matching
+    # columns, the first one to produce a verdict wins per row.
+    def _find_vp_cols(df: pd.DataFrame) -> list[str]:
+        explicit_hints = [h for h in VP_HEADER_HINTS if h != "carrosserie"]
+        explicit_cols: list[str] = []
+        carrosserie_cols: list[str] = []
         for c in df.columns:
             low = str(c).strip().lower()
-            for h in VP_HEADER_HINTS:
-                if h in low:
-                    return c
-        return None
+            if any(h in low for h in explicit_hints):
+                explicit_cols.append(c)
+            elif "carrosserie" in low:
+                carrosserie_cols.append(c)
+        return explicit_cols + carrosserie_cols
 
     for slug in EP_SLUGS:
         df = indexed.get(slug)
         if df is None or df.empty:
             continue
-        col = _find_vp_col(df)
-        if col is None:
+        cols = _find_vp_cols(df)
+        if not cols:
             continue
-        for key, val in df[col].items():
-            if key in out or _is_null(val):
-                continue
-            low = str(val).strip().lower()
-            # VU first (plus spécifique : "VU" est un substring de "vur",
-            # mais on préfère VU-over-VP quand les 2 matchent par sécurité).
-            if any(h in low for h in VU_VALUE_HINTS):
-                out[key] = (False, slug)
-            elif any(h in low for h in VP_VALUE_HINTS):
-                out[key] = (True, slug)
+        for col in cols:
+            for key, val in df[col].items():
+                if key in out or _is_null(val):
+                    continue
+                low = str(val).strip().lower()
+                # VU first (plus spécifique : "VU" est un substring de "vur",
+                # mais on préfère VU-over-VP quand les 2 matchent par sécurité).
+                if any(h in low for h in VU_VALUE_HINTS):
+                    out[key] = (False, slug)
+                elif any(h in low for h in VP_VALUE_HINTS):
+                    out[key] = (True, slug)
     return out
 
 
