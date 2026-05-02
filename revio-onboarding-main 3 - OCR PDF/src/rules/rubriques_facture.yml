@@ -1,0 +1,105 @@
+whitelist:
+- pattern: loyer|financement|location|amortissement
+  revio_field: null
+  contributes_to_total_only: true
+  note: Contribue au totalPrice. Pas de champ Revio dédié (le loyer brut hors options
+    est noyé dans totalPrice).
+- pattern: \brc\b|responsabilité civile
+  revio_field: civilLiabilityPrice
+- pattern: tous risques|multirisques|\bdommages\b|assurance auto|\bassurance\b
+  revio_field: allRisksPrice
+  note: 'Ex. Arval : ''Assurance Auto Multirisques''. Le mot ''assurance''
+    seul (XLSX Ayvens « Etat des dépenses ») est mappé ici par défaut faute
+    de granularité dans l''export.'
+- pattern: bris de glace|\bvol\b|\bincendie\b|vol[- ]?incendie
+  revio_field: theftFireAndGlassPrice
+- pattern: perte financière|perte financiere
+  revio_field: financialLossPrice
+- pattern: protection juridique
+  revio_field: legalProtectionPrice
+- pattern: \bentretien\b|\bmaintenance\b
+  revio_field: maintenancePrice
+  note: Hors 'aucune prestation'
+- pattern: véhicule de remplacement|voiture de remplacement|véhicule remplacement|\bvr\b
+  revio_field: replacementVehiclePrice
+  note: 'Inclut « VEHICULE REMPLACEMENT » sans préposition (XLSX Ayvens).'
+- pattern: \bpneu\b|pneumatique
+  revio_field: tiresPrice
+  note: Hors 'hors avenant' / 'crevaison' (= exceptionnel)
+- pattern: carte carburant|redevance carburant
+  revio_field: gasCardPrice
+  note: EXCLURE 'charges carburant' (= consommation, pas redevance)
+- pattern: télébadge|télépéage|badge autoroute|redevance péage
+  revio_field: tollCardPrice
+  note: EXCLURE 'péage consommé'
+blacklist:
+- pattern: Pattern regex
+  note: Raison
+- pattern: contravention
+  note: Frais PV/amende — exceptionnel
+- pattern: amende
+  note: idem
+- pattern: \bpv\b
+  note: idem
+- pattern: infraction
+  note: idem
+- pattern: gestion administrative
+  note: Frais admin one-off
+- pattern: gestion d'avenant
+  note: Frais d'avenant one-off
+- pattern: \bavenant\b
+  note: Modification contrat — exceptionnel
+- pattern: modification de contrat
+  note: idem
+- pattern: restitution
+  note: Frais de fin de contrat
+- pattern: fin de contrat
+  note: idem
+- pattern: remise en état
+  note: Frais de réparations fin de contrat
+- pattern: km supplémentaire
+  note: Dépassement km facturé — exceptionnel
+- pattern: dépassement kilométrique
+  note: idem
+- pattern: km excédentaire
+  note: idem
+- pattern: consommation carburant
+  note: Conso réelle (≠ redevance carte)
+- pattern: charges carburant
+  note: idem
+- pattern: conso carburant
+  note: idem
+- pattern: péage consommé
+  note: Péages facturés (≠ redevance badge)
+- pattern: consommation péage
+  note: idem
+- pattern: taxe carburant
+  note: Régularisation fiscale
+- pattern: régularisation
+  note: Ajustement comptable ponctuel
+- pattern: intérêts
+  note: Intérêts moratoires
+- pattern: indemnité
+  note: Indemnité forfaitaire
+- pattern: franchise
+  note: Franchise accident — ponctuel
+- pattern: sinistre
+  note: Facturation post-sinistre
+- pattern: frais de recouvrement
+  note: Relance impayé
+- pattern: \bsolde\b
+  note: Solde de régularisation
+# Jalon 5.3.5 — labels typiques des XLSX « Etat des dépenses » Ayvens
+# (frais one-off à exclure du totalPrice mensuel récurrent).
+- pattern: frais a l'acte|frais à l'acte
+  note: Frais ponctuels à l'acte
+- pattern: frais divers
+  note: idem
+- pattern: frais remise en etat|frais remise en état
+  note: idem (alias de remise en état)
+- pattern: remboursement
+  note: Remboursement ponctuel
+- pattern: \bcarburant\b
+  note: Conso carburant — facturée à part de la redevance carte (déjà couvert
+    par les patterns existants mais le label « CARBURANT » seul apparaît dans
+    Ayvens XLSX).

@@ -1,0 +1,3272 @@
+# Revio — dictionnaire de normalisation des valeurs.
+# Maintenu par l'app onboarding (page « 🧭 Normalisation »).
+# Éditable à la main mais préfère l'UI quand c'est possible.
+# status : validated | pending. source : seed | ai | manual.
+# Les `raw` sont matchés insensibles à la casse/accents/ponctuation.
+---
+mappings:
+  asset.kind:
+  - raw: Carte BP
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Carte carburant
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Carte essence
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Carte fuel
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Carte Shell
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Carte TotalEnergies
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Fuel card
+    target: fuel_card
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Badge
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Badge péage
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Bip&Go
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Liber-t
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Toll tag
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Télé-péage
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Télépéage
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Ulys
+    target: toll_tag
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.allRisksEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.civilLiabilityEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.financialLossEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.gasCardEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.isHT:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.legalProtectionEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.maintenanceEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.maintenanceNetwork:
+  - raw: Any
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Peu importe
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Quelconque
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Tous
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Tout réseau
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Centre spécialisé
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Réseau spécialisé
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Specialist
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Spécialiste
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Spécialisé
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Concession
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Marque
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Réseau officiel
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Réseau standard
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Standard
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.replacementVehicleEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.theftFireAndGlassEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.tiresEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.tiresNetwork:
+  - raw: Any
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Peu importe
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Quelconque
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Tous
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Tout réseau
+    target: any
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Centre spécialisé
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Réseau spécialisé
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Specialist
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Spécialiste
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Spécialisé
+    target: specialist
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Concession
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Marque
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Réseau officiel
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Réseau standard
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Standard
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.tiresType:
+  - raw: 4 saisons
+    target: 4seasons
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 4seasons
+    target: 4seasons
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: All season
+    target: 4seasons
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: All seasons
+    target: 4seasons
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Toute saison
+    target: 4seasons
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Toutes saisons
+    target: 4seasons
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Standard
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Summer
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Été
+    target: standard
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Hiver
+    target: winter
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: M+S
+    target: winter
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Neige
+    target: winter
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Pneus hiver
+    target: winter
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Winter
+    target: winter
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  contract.tollCardEnabled:
+  - raw: '0'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Disabled
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Désactivé
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclu
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Exclue
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'False'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Faux
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inactif
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: N
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'No'
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Non
+    target: 'FALSE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: '1'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Actif
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Activé
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Enabled
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclue
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Inclus
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: O
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Oui
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'True'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vrai
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: X
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Y
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 'Yes'
+    target: 'TRUE'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  driver.civility:
+  - raw: H
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Homme
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: M
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Male
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Masculin
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Monsieur
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Mr
+    target: '1'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: F
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Female
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Femme
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Féminin
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Madame
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Mademoiselle
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Mlle
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Mme
+    target: '2'
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  driver.professionalStatus:
+  - raw: Consultant
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Contractor
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: External
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Externe
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Freelance
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Intérim
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Intérimaire
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Prestataire
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Sous-traitant
+    target: external
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Alternance
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Alternant
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Apprenti
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: CDD
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: CDI
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Collaborateur
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Employee
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Employé
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Internal
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Interne
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Salarié
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Stage
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Stagiaire
+    target: internal
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  driver.seniority:
+  - raw: Agent
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Collaborateur
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Collaboratrice
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Employé
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Employée
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Opérateur
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Salarié
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Salariée
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Technicien
+    target: employee
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: CEO
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: CFO
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: COO
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: CTO
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: DG
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Directeur général
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Dirigeant
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Executive
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: PDG
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Président
+    target: executive
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Directeur
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Director
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Directrice
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Head
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Head of
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Vice-président
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: VP
+    target: leadership
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Cadre
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Chef
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Chef d'équipe
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Manager
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Responsable
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Supervisor
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Team lead
+    target: manager
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  vehicle.motorisation:
+  - raw: D
+    target: diesel
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Diesel
+    target: diesel
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Gasoil
+    target: diesel
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Gazole
+    target: diesel
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: GO
+    target: diesel
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: 100% électrique
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: BEV
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: Electric
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: EV
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: H2
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: Hydrogène
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: Électrique
+    target: electric
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+  - raw: Biogaz
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Bioéthanol
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: E85
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: ES
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Essence
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Gaz
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: GNV
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: GPL
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: SP95
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: SP98
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Super éthanol
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Superéthanol
+    target: gas
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Diesel-hybride
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Véhicule hybride (carburant d'appoint en suffixe).
+  - raw: Essence-hybride
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Véhicule hybride (carburant d'appoint en suffixe).
+  - raw: HEV
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Hybrid
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Hybride
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Hybride rechargeable
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Hybride-diesel
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Véhicule hybride (carburant d'appoint en suffixe).
+  - raw: Hybride-essence
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+    note: Véhicule hybride (carburant d'appoint en suffixe).
+  - raw: MHEV
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Mild hybrid
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: PHEV
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Plug in hybrid
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Plug-in
+    target: hybrid
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  vehicle.usage:
+  - raw: Fonction
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Particulier
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Personnel
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Private
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Privé
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: V.P.
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: VF
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Voiture particulière
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: VP
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Véhicule de fonction
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Véhicule particulier
+    target: private
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Dériv VP
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Dérivé VP
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Mission
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Parc
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Pool
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Service
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: VS
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Véhicule de service
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Véhicule de société
+    target: service
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Camionnette
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: CTTE
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Fourgon
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Fourgonnette
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Utilitaire
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Utility
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: V.U.
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: V.U.L.
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Van
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: VU
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: VUL
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
+  - raw: Véhicule utilitaire
+    target: utility
+    status: validated
+    source: seed
+    created_at: '2026-04-22'
+    updated_at: '2026-04-22'
+    validated_at: '2026-04-22'
