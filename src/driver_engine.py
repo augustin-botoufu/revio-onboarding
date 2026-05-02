@@ -465,6 +465,16 @@ def process_drivers(
         anomalies.extend(_unknown_plate_anomalies(out, plate_keys_series, vehicle_keys))
         anomalies.extend(_duplicate_plate_anomalies(out, plate_keys_series))
 
+    # --- Smart title-case on text columns (Jalon 5.3.11) -----------------
+    # Cleans up SHOUTING-CAPS in firstName / lastName / city / street /
+    # birthCity / licenseIssueLocation. Acronyms (BMW, MG, GT…) and
+    # single-letter / Roman-numeral tokens (« V », « II ») are
+    # preserved — see :mod:`src.text_case`.
+    from .text_case import smart_title_case, DRIVER_TEXT_COLUMNS
+    for col in DRIVER_TEXT_COLUMNS:
+        if col in out.columns:
+            out[col] = out[col].map(smart_title_case)
+
     counts = {
         "rows": len(out),
         "warnings": len(warnings),

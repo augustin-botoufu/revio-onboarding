@@ -482,6 +482,14 @@ def apply_rules(
                     found_in.setdefault(p, []).append(slug)
         orphan_df.insert(0, "sources_found", [", ".join(found_in.get(p, [])) for p in orphan_df.index])
 
+    # Jalon 5.3.11 — smart title-case on free-form text columns
+    # (brand / model / variant). Done as a post-pass so it covers
+    # values posted by every source without us having to add a YAML
+    # transform line in each rule.
+    _apply_title_case_to_df(main_df, table)
+    if orphan_df is not None:
+        _apply_title_case_to_df(orphan_df, table)
+
     return EngineResult(
         df=main_df,
         issues=issues,
@@ -492,6 +500,22 @@ def apply_rules(
         rules_yaml=rules_yaml,
         lineage=lineage,
     )
+
+
+def _apply_title_case_to_df(df, table: str) -> None:
+    """Apply smart_title_case on the registered text columns.
+
+    Mutates ``df`` in place. Skips columns not present in the DataFrame
+    so it's safe to call regardless of which fields the rules engine
+    actually populated.
+    """
+    if df is None or df.empty:
+        return
+    from .text_case import smart_title_case, VEHICLE_TEXT_COLUMNS, CONTRACT_TEXT_COLUMNS
+    cols = VEHICLE_TEXT_COLUMNS if table == "vehicle" else CONTRACT_TEXT_COLUMNS
+    for col in cols:
+        if col in df.columns:
+            df[col] = df[col].map(smart_title_case)
 
 
 def run_vehicle(
