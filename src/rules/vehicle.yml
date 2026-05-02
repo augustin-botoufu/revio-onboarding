@@ -477,7 +477,13 @@ fields:
     - priority: 1
       source: api_plaques
       source_label: API Plaques
-      column: date_premiere_circulation
+      # Jalon 5.3.16 — Fix nom de colonne. Le YAML pointait vers
+      # 'date_premiere_circulation' qui n'existe pas dans l'export
+      # SIV réel ; la vraie colonne est 'date1erCir_fr' (format
+      # YYYY/MM/DD natif). Bug latent depuis le départ — date côté
+      # SIV jamais lue → fallback P2/P3 → cellule vide quand les
+      # loueurs/client ne fournissent rien → import Revio rejeté.
+      column: date1erCir_fr
       transform: normalize_date
       transform_doc: Format YYYY/MM/DD
       example: '2024-03-15'
