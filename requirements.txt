@@ -7,3 +7,9 @@ pydantic>=2.5.0
 python-dotenv>=1.0.0
 pyyaml>=6.0
 extra-streamlit-components>=0.1.70
+# Jalon 5.3.13 — PDF facture parsing (Arval / Ayvens / autre loueur).
+# pdfplumber is the primary text extractor (better at preserving layout
+# on multi-column invoices); pypdf is the fallback when pdfplumber fails
+# on a non-standard PDF generator.
+pdfplumber>=0.11.0
+pypdf>=4.0.0
