@@ -530,6 +530,17 @@ def _init_state():
         # result holds the normalised DataFrame + anomalies/warnings and feeds
         # the Driver tab + the unified zip.
         "driver_result": None,              # driver_engine.DriverResult or None
+        # --- Options VS (Jalon 5.3.18) ---
+        # Apply ONLY to vehicles classified as VS (= service in Revio).
+        # Output denomination : "VS" keeps usage=service, "VU" rewrites
+        # service → utility in the final Vehicle table (without touching
+        # isHT — the fiscal HT logic is unchanged).
+        "vs_output_denomination": "VS",     # "VS" or "VU"
+        # HT/TTC strategy : "standard" = current behaviour (presume HT
+        # for VS, override only on explicit detection). "api_plaques" =
+        # use api_plaques.genreVCGNGC as the authoritative arbitrer when
+        # no explicit HT/TTC mention is found.
+        "vs_ht_strategy": "standard",       # "standard" or "api_plaques"
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -624,6 +635,122 @@ with st.sidebar:
                 height=140,
                 label_visibility="collapsed",
             )
+
+        # --- Options VS (Jalon 5.3.18) -----------------------------------
+        # Two configurable knobs that ONLY affect vehicles classified as
+        # VS (= service in Revio). They live next to the fleet segmentation
+        # because they're per-onboarding decisions an AM might want to flip
+        # depending on the client's accounting convention.
+        st.markdown("---")
+        st.markdown("### 🚙 Options VS")
+
+        c_lbl, c_pop = st.columns([3, 1])
+        with c_lbl:
+            st.caption("Ajuste comment les **VS** sont traités à l'export.")
+        with c_pop:
+            with st.popover("ℹ️ Aide", use_container_width=True):
+                st.markdown(
+                    "**Dénomination dans la sortie**\n\n"
+                    "- **VS** _(défaut)_ : on garde `service` dans la table "
+                    "Véhicules. Cohérent avec ton template Revio.\n"
+                    "- **VU** : on remplace `service` par `utility` "
+                    "uniquement pour les VS. Le drapeau fiscal **isHT** "
+                    "n'est pas touché (les contrats VS restent en HT).\n\n"
+                    "**Logique HT/TTC pour les VS**\n\n"
+                    "- **Standard** _(défaut)_ : on présume HT pour un VS, "
+                    "sauf si on détecte explicitement TTC (nom de colonne, "
+                    "valeur de cellule, ou Genre/Carrosserie loueur qui "
+                    "dit VP).\n"
+                    "- **API Plaques fait foi** : si la détection explicite "
+                    "ne tranche pas, on regarde **api_plaques.genreVCGNGC** "
+                    "pour décider. SIV dit VP → on assume TTC (et on "
+                    "convertit en HT). SIV dit VU/VS/VASP → on assume HT. "
+                    "La dénomination Vehicle (`usage`) n'est pas modifiée "
+                    "par ce mode."
+                )
+
+        # Pretty segmented controls. ``st.segmented_control`` arrived in
+        # Streamlit 1.36 ; we fall back to st.radio horizontally if the
+        # current Streamlit is older (defensive for self-hosted users).
+        _has_segmented = hasattr(st, "segmented_control")
+
+        st.markdown(
+            "<div style='font-size:0.85em;color:#6b7280;margin-bottom:0.25rem;"
+            "margin-top:0.5rem'>Dénomination dans la sortie</div>",
+            unsafe_allow_html=True,
+        )
+        if _has_segmented:
+            _new_denom = st.segmented_control(
+                "Dénomination",
+                options=["VS", "VU"],
+                default=st.session_state.vs_output_denomination,
+                key="vs_denom_seg",
+                label_visibility="collapsed",
+            )
+        else:
+            _new_denom = st.radio(
+                "Dénomination",
+                options=["VS", "VU"],
+                index=0 if st.session_state.vs_output_denomination == "VS" else 1,
+                horizontal=True,
+                key="vs_denom_radio",
+                label_visibility="collapsed",
+            )
+        if _new_denom and _new_denom != st.session_state.vs_output_denomination:
+            st.session_state.vs_output_denomination = _new_denom
+
+        st.markdown(
+            "<div style='font-size:0.85em;color:#6b7280;margin-bottom:0.25rem;"
+            "margin-top:0.75rem'>Logique HT/TTC</div>",
+            unsafe_allow_html=True,
+        )
+        _ht_options = ["Standard", "API Plaques fait foi"]
+        _ht_value_map = {"Standard": "standard", "API Plaques fait foi": "api_plaques"}
+        _current_ht_label = (
+            "Standard" if st.session_state.vs_ht_strategy == "standard"
+            else "API Plaques fait foi"
+        )
+        if _has_segmented:
+            _new_ht_label = st.segmented_control(
+                "Logique HT/TTC",
+                options=_ht_options,
+                default=_current_ht_label,
+                key="vs_ht_seg",
+                label_visibility="collapsed",
+            )
+        else:
+            _new_ht_label = st.radio(
+                "Logique HT/TTC",
+                options=_ht_options,
+                index=_ht_options.index(_current_ht_label),
+                horizontal=True,
+                key="vs_ht_radio",
+                label_visibility="collapsed",
+            )
+        if _new_ht_label:
+            st.session_state.vs_ht_strategy = _ht_value_map[_new_ht_label]
+
+        # Status pill — gives at-a-glance feedback on what's active.
+        _denom_pill = (
+            "🏷️ <code>VS → service</code>" if st.session_state.vs_output_denomination == "VS"
+            else "🏷️ <code>VS → utility</code>"
+        )
+        _ht_pill = (
+            "📐 HT/TTC standard" if st.session_state.vs_ht_strategy == "standard"
+            else "📐 HT/TTC SIV"
+        )
+        st.markdown(
+            "<div style='display:flex;gap:0.4rem;flex-wrap:wrap;"
+            "margin-top:0.6rem;font-size:0.8em'>"
+            f"<span style='background:#fff7ed;border:1px solid #fed7aa;"
+            f"border-radius:999px;padding:0.15rem 0.55rem;color:#9a3412'>"
+            f"{_denom_pill}</span>"
+            f"<span style='background:#eff6ff;border:1px solid #bfdbfe;"
+            f"border-radius:999px;padding:0.15rem 0.55rem;color:#1e40af'>"
+            f"{_ht_pill}</span>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
 
         # GitHub sync diagnostics — lets the user verify their PAT works
         # without having to memorize a real pattern (Jalon 2.5 safety net).

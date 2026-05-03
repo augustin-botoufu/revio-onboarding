@@ -490,6 +490,19 @@ def apply_rules(
     if orphan_df is not None:
         _apply_title_case_to_df(orphan_df, table)
 
+    # Jalon 5.3.18 — VS → VU output rewrite (Vehicle table only).
+    # When the AM activates the « VU » denomination toggle in the
+    # sidebar, we substitute usage=service → usage=utility for the
+    # rows that ended up classified as VS. The fiscal isHT flag on
+    # the Contract side is not touched — only the Vehicle ``usage``
+    # cell value changes. We read the active toggle from session
+    # state when streamlit is loaded ; otherwise behave as if the
+    # default ("VS") was selected.
+    if table == "vehicle":
+        _apply_vs_denomination_override(main_df)
+        if orphan_df is not None:
+            _apply_vs_denomination_override(orphan_df)
+
     return EngineResult(
         df=main_df,
         issues=issues,
@@ -516,6 +529,35 @@ def _apply_title_case_to_df(df, table: str) -> None:
     for col in cols:
         if col in df.columns:
             df[col] = df[col].map(smart_title_case)
+
+
+def _apply_vs_denomination_override(df) -> None:
+    """Rewrite ``usage = service`` → ``usage = utility`` if the AM has
+    activated the « VU » denomination toggle in the sidebar.
+
+    Reads ``st.session_state.vs_output_denomination`` defensively : when
+    streamlit isn't available (tests, scripts), or when the key is missing,
+    we default to "VS" (= no rewrite, current behaviour).
+
+    Mutates ``df`` in place. Only the ``usage`` column is touched. The
+    Vehicle's fiscal status (which lives downstream in the Contract's
+    ``isHT``) is **not** modified — by design, because Augustin's spec
+    says the toggle changes only the label, not the tax convention.
+    """
+    if df is None or df.empty or "usage" not in df.columns:
+        return
+    try:
+        import streamlit as st
+        denom = st.session_state.get("vs_output_denomination", "VS")
+    except Exception:
+        denom = "VS"
+    if denom != "VU":
+        return
+    # Rewrite service → utility. Use ``apply`` so we don't lose ``object``
+    # dtype on the column.
+    df["usage"] = df["usage"].apply(
+        lambda v: "utility" if (isinstance(v, str) and v.strip().lower() == "service") else v
+    )
 
 
 def run_vehicle(

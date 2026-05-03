@@ -491,6 +491,20 @@ _INVOICE_PRICE_FIELDS = (
 )
 
 
+def _read_vs_ht_strategy() -> str:
+    """Return ``'standard'`` or ``'api_plaques'`` from session state.
+
+    Falls back to ``'standard'`` whenever streamlit isn't loaded (tests,
+    scripts) or the key is missing — the default behaviour stays the
+    historical one in those cases.
+    """
+    try:
+        import streamlit as st
+        return st.session_state.get("vs_ht_strategy", "standard")
+    except Exception:
+        return "standard"
+
+
 def _postpass_apply_ht_ttc_flavour(
     out_df: pd.DataFrame,
     source_by_cell: dict,
@@ -516,6 +530,16 @@ def _postpass_apply_ht_ttc_flavour(
     if "isHT" not in out_df.columns:
         return
     facture_slugs = _PARSER_DF_SOURCES
+    # Jalon 5.3.18 — mode 2 only fires for VS rows (= isHT=True since
+    # service ⇒ HT). We pre-compute the SIV verdict per plate so we can
+    # cheaply pick the right flavour.
+    vs_strategy = _read_vs_ht_strategy()
+    siv_vp_by_key = (
+        _extract_vp_from_api_plaques(indexed_sources)
+        if vs_strategy == "api_plaques"
+        else {}
+    )
+
     for key in out_df.index:
         is_ht_val = out_df.at[key, "isHT"]
         if _is_null(is_ht_val):
@@ -527,6 +551,19 @@ def _postpass_apply_ht_ttc_flavour(
         else:
             is_ht = bool(is_ht_val)
         suffix = "_ht" if is_ht else "_ttc"
+
+        # Mode 2 override (Jalon 5.3.18) — only for VS rows (isHT=True).
+        # If api_plaques classifies the plate as VP, the lessor's facture
+        # was probably written in TTC for this plate. We read the _ttc
+        # flavour, then convert back to HT below to align with isHT=True.
+        # See ``_postpass_normalize_client_total_flavour`` for the same
+        # logic on client_file totalPrice.
+        siv_says_vp = False
+        if (vs_strategy == "api_plaques" and is_ht and key in siv_vp_by_key
+                and siv_vp_by_key[key][0] is True):
+            siv_says_vp = True
+            suffix = "_ttc"
+
         for field in _INVOICE_PRICE_FIELDS:
             if field not in out_df.columns:
                 continue
@@ -542,6 +579,21 @@ def _postpass_apply_ht_ttc_flavour(
             new_val = src_df.at[key, flavoured_col]
             if _is_null(new_val):
                 continue
+            # Mode 2 (Jalon 5.3.18) — VS dont SIV dit « VP » : on a lu
+            # `_ttc`, mais le contrat reste isHT=True donc la cellule
+            # finale doit être en HT. On divise par 1.20 pour la ramener
+            # à la flavour cible. Sans cette étape, la valeur stockée
+            # serait en TTC alors qu'isHT dit HT — incohérent.
+            note_extra = ""
+            if siv_says_vp:
+                try:
+                    new_val = round(float(new_val) / 1.20, 2)
+                    note_extra = (
+                        " [Mode 2 — SIV classe VP : valeur lue en TTC, "
+                        "convertie en HT (÷1.20) pour aligner avec isHT=True]"
+                    )
+                except (ValueError, TypeError):
+                    pass
             old_val = out_df.at[key, field]
             # Use _values_differ to compare with float tolerance — avoids
             # spurious lineage entries for round-tripped TTC=HT*1.0 cases.
@@ -559,7 +611,7 @@ def _postpass_apply_ht_ttc_flavour(
                 notes=(
                     f"Ajusté à la flavour {suffix.strip('_').upper()} après "
                     f"résolution isHT={is_ht}. Avant: {old_val!r}. "
-                    f"Source: {flavoured_col}."
+                    f"Source: {flavoured_col}." + note_extra
                 ),
             ))
 
@@ -793,25 +845,60 @@ _FLAVOUR_TTC_RE = __import__("re").compile(
 )
 
 
-def _detect_price_flavour(col_name: Optional[str], raw_value: Any) -> Optional[str]:
-    """Return ``'ht'`` / ``'ttc'`` / None based on column name + raw value.
+def _detect_price_flavour(
+    col_name: Optional[str],
+    raw_value: Any,
+    lessor_row: Optional[dict] = None,
+) -> Optional[str]:
+    """Return ``'ht'`` / ``'ttc'`` / None based on column name, raw value
+    and optional lessor row context.
 
-    Looks for HT/TTC mentions both in the column header (typical
-    « Loyer mensuel HT ») and in the cell value itself (typical
-    « 59 € HT » or « 60 ttc »). When neither is present, returns None
-    and the caller falls back to the contract-level convention (VP=TTC,
-    VU=HT).
+    Detection sources, in order :
+
+    1. ``col_name`` — column label (« Loyer mensuel HT »).
+    2. ``raw_value`` — cell content (« 59 € HT », « 60 ttc »).
+    3. ``lessor_row`` — when provided, scans common Genre/Carrosserie
+       fields for VU / VS / VASP / CTTE / DERIV (→ HT, fiscal
+       utilitaire) or VP (→ TTC). Used by the EP loueur post-pass so a
+       row labelled « Berline VU 5 po » in the Carrosserie column tells
+       us the loueur facture en HT for that plate even when the price
+       column is mute.
+
+    When nothing is detected returns None and the caller falls back to
+    the contract-level convention (VP=TTC / VS/VU=HT).
     """
     text = f"{col_name or ''} {raw_value if raw_value is not None else ''}"
-    # TTC checked first because « TTC » contains « T » which won't be
-    # falsely interpreted as HT, but a label like « HT/TTC » should
-    # surface BOTH and we want to err on the side of TTC (a more
-    # defensive default for the AM to spot-check). In practice the
-    # two regexes don't both match a clean label.
     if _FLAVOUR_TTC_RE.search(text):
         return "ttc"
     if _FLAVOUR_HT_RE.search(text):
         return "ht"
+
+    # 3rd pass — lessor row context (Jalon 5.3.18). We look at the
+    # common Genre / Carrosserie fields and match the same vocabulary
+    # used by ``_extract_vp_from_ep_sources``.
+    if lessor_row:
+        # Probe common header names. We ASCII-fold + lower so accented
+        # variants and casing don't matter.
+        import unicodedata
+        candidate_keys = ("Genre", "Carrosserie", "genre", "carrosserie",
+                          "Genre du véhicule", "Type véhicule", "Catégorie")
+        for k in candidate_keys:
+            if k not in lessor_row:
+                continue
+            v = lessor_row.get(k)
+            if v is None or _is_null(v):
+                continue
+            s = unicodedata.normalize("NFKD", str(v))
+            s = "".join(c for c in s if not unicodedata.combining(c)).lower()
+            # VU markers — fiscal utilitaire = HT.
+            for marker in ("vu", "vs", "vasp", "ctte", "deriv", "utilit",
+                           "commercial", "camion", "fourgon"):
+                if marker in s:
+                    return "ht"
+            # VP markers — fiscal voiture particulière = TTC.
+            for marker in ("vp", "particul", "tourisme"):
+                if marker in s:
+                    return "ttc"
     return None
 
 
@@ -851,6 +938,15 @@ def _postpass_normalize_client_total_flavour(
     # via the lineage records (source_col).
     source_col_override = manual_column_overrides.get(("client_file", "totalPrice"))
 
+    # Jalon 5.3.18 — mode 2 (api_plaques fait foi) only triggers for VS
+    # rows. Pre-compute the SIV verdict so the fallback branch can use it.
+    vs_strategy = _read_vs_ht_strategy()
+    siv_vp_by_key = (
+        _extract_vp_from_api_plaques(indexed_sources)
+        if vs_strategy == "api_plaques"
+        else {}
+    )
+
     factor = 1.0 + tva_rate
     for key in out_df.index:
         if source_by_cell.get((key, "totalPrice")) != "client_file":
@@ -879,10 +975,24 @@ def _postpass_normalize_client_total_flavour(
             continue
 
         raw_value = client_df.at[key, col]
-        source_flavour = _detect_price_flavour(col, raw_value)
+
+        # Pass the full client row as ``lessor_row`` so detection can pick
+        # up Genre/Carrosserie hints (Jalon 5.3.18). For client_file the
+        # row is unlikely to carry that info, but the API stays generic
+        # in case the client adds an « Usage VP/VS » column.
+        client_row = client_df.loc[key].to_dict() if key in client_df.index else None
+        source_flavour = _detect_price_flavour(col, raw_value, lessor_row=client_row)
+
         if source_flavour is None:
-            # Fallback to contract-level convention (VP=TTC / VU=HT).
-            source_flavour = "ht" if target_is_ht else "ttc"
+            # Fallback. Mode 1 (standard) = contract-level convention
+            # (VP=TTC / VU/VS=HT). Mode 2 (api_plaques) for VS rows only :
+            # if SIV says VP, the lessor likely wrote TTC despite our VS
+            # label → assume TTC source so we convert below.
+            if (vs_strategy == "api_plaques" and target_is_ht
+                    and key in siv_vp_by_key and siv_vp_by_key[key][0] is True):
+                source_flavour = "ttc"
+            else:
+                source_flavour = "ht" if target_is_ht else "ttc"
 
         # Already in the right flavour ? Nothing to convert.
         if (source_flavour == "ht" and target_is_ht) or (

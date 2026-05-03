@@ -241,34 +241,40 @@ fields:
     - priority: 1
       source: api_plaques
       source_label: API Plaques
-      column: version
-      transform: title_case
+      # Jalon 5.3.17 — Fix nom de colonne. Le YAML pointait vers
+      # 'version' qui n'existe pas dans l'export SIV réel. La vraie
+      # colonne pertinente est 'sra_commercial' qui contient le détail
+      # commercial du véhicule — motorisation + finition (ex. '1.5
+      # BLUEHDI 100 GT PACK'). Le smart_title_case (5.3.11) en post-pass
+      # nettoie la casse à l'arrivée.
+      column: sra_commercial
+      transform: passthrough
       transform_doc: Title case
-      example: Intens
+      example: 1.5 BlueHDi 100 GT Pack
     - priority: 2
       source: arval_uat
       source_label: Arval - État de parc (UAT)
       column: Version
-      transform: title_case
+      transform: passthrough
       example: Intens
       note: Ex-æquo loueur
     - priority: 2
       source: autre_loueur_etat_parc
       source_label: État de parc autre loueur
-      transform: title_case
+      transform: passthrough
       note: Ex-æquo loueur
     - priority: 2
       source: ayvens_etat_parc
       source_label: Ayvens - État de parc
       column: Version
-      transform: title_case
+      transform: passthrough
       example: Intens TCe 90
       note: Ex-æquo loueur. Concatène souvent motorisation; à nettoyer
     - priority: 3
       source: client_file
       source_label: Fichier véhicules client (interne)
       column_hint: à mapper manuellement (fallback IA)
-      transform: title_case
+      transform: passthrough
       example: Intens
       note: Fallback
   motorisation:
