@@ -50,17 +50,53 @@ def _clean_str(s: str) -> str:
     return s.replace("\xa0", " ").strip()
 
 
+def _dedupe_columns(cols: list[str]) -> list[str]:
+    """Suffix duplicate column names with ``_2``, ``_3``, … to keep them
+    unique. Same convention pandas uses with ``mangle_dupe_cols=True``,
+    which is the default in older versions and was the only way pre-2.0.
+
+    Jalon 5.3.21 — needed because :func:`_clean_str` collapses whitespace
+    variants (regular space, nbsp ``\\xa0``, tab) so two columns that
+    looked different in the source file (e.g. « Calcul sans carte
+    carburant TTC » vs « Calcul sans carte carburant TTC<nbsp> ») end up
+    with the same key after normalisation. Without dedupe, ``df[col]``
+    then returns a DataFrame instead of a Series and downstream code
+    crashes with ``AttributeError: 'DataFrame' object has no attribute 'dtype'``.
+    """
+    seen: dict[str, int] = {}
+    out: list[str] = []
+    for c in cols:
+        if c not in seen:
+            seen[c] = 1
+            out.append(c)
+        else:
+            seen[c] += 1
+            out.append(f"{c}_{seen[c]}")
+    return out
+
+
 def _normalize_headers_and_values(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize column names and string values.
 
     - Strip leading/trailing whitespace on column names and values.
     - Replace non-breaking spaces (\\xa0) with regular spaces (lessor exports
       occasionally sneak these in, which breaks exact column matching).
+    - Deduplicate column names that would otherwise collide after the
+      whitespace cleanup (Jalon 5.3.21).
     """
-    df = df.rename(columns={c: _clean_str(str(c)) for c in df.columns})
+    cleaned_cols = [_clean_str(str(c)) for c in df.columns]
+    deduped = _dedupe_columns(cleaned_cols)
+    df = df.copy()
+    df.columns = deduped
     for col in df.columns:
-        if df[col].dtype == object:
-            df[col] = df[col].map(lambda v: _clean_str(v) if isinstance(v, str) else v)
+        sub = df[col]
+        # Defensive : if a duplicate slipped through (e.g. mismatched index),
+        # df[col] could still return a DataFrame. Skip that case rather than
+        # crash — the column will keep its raw values.
+        if not isinstance(sub, pd.Series):
+            continue
+        if sub.dtype == object:
+            df[col] = sub.map(lambda v: _clean_str(v) if isinstance(v, str) else v)
     return df
 
 
