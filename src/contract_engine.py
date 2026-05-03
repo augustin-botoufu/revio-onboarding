@@ -1127,7 +1127,47 @@ def _postpass_resolve_partner_id(
                 # else: lessor name not found in partner_index — fall through
                 # to the slug-based attribution below.
 
-        # ── Priority 2 — slug-based attribution (Jalon 5.2.2 fallback) ──
+        # ── Priority 2 — invoice DataFrame ``lessor`` column (Jalon 5.3.20) ──
+        # The invoice_xlsx_parser stamps every row with a ``lessor`` value
+        # detected from the filename (« alphabet » / « athlon » / « agilauto »
+        # / etc.). We resolve the UUID via partners.resolve_partner_id so
+        # that lessors not directly mapped via SLUG_TO_PARTNER still get
+        # their partnerId — provided the AM named their file with the
+        # lessor's name (or its alias).
+        invoice_lessor_resolved = False
+        for slug in _PARSER_DF_SOURCES:
+            df_src = indexed_sources.get(slug)
+            if df_src is None or df_src.empty or "lessor" not in df_src.columns:
+                continue
+            if key not in df_src.index:
+                continue
+            lessor_name = df_src.at[key, "lessor"]
+            if _is_null(lessor_name) or str(lessor_name).strip().lower() == "autre":
+                continue
+            uuid = resolve_partner_id(str(lessor_name))
+            if not uuid:
+                continue
+            out_df.at[key, "partnerId"] = uuid
+            source_by_cell[(key, "partnerId")] = slug
+            lineage.record(LineageRecord(
+                table="contract", key=key, field="partnerId",
+                value=uuid, source_used=slug,
+                source_col="lessor", source_row=None, priority=2,
+                transform="lookup_by_invoice_lessor_name",
+                rule_id=build_rule_id("contract", "partnerId", slug, 2),
+                conflicts_ignored=[],
+                notes=(
+                    f"Résolu depuis colonne lessor du parser facture "
+                    f"({slug}) = {str(lessor_name)!r} → {uuid} via "
+                    f"partners.resolve_partner_id."
+                ),
+            ))
+            invoice_lessor_resolved = True
+            break
+        if invoice_lessor_resolved:
+            continue
+
+        # ── Priority 3 — slug-based attribution (Jalon 5.2.2 fallback) ──
         chosen_slug = None
         for slug in _PARTNER_ATTRIBUTION_ORDER:
             df_src = indexed_sources.get(slug)
@@ -1146,9 +1186,9 @@ def _postpass_resolve_partner_id(
         lineage.record(LineageRecord(
             table="contract", key=key, field="partnerId",
             value=partner_id, source_used=chosen_slug,
-            source_col=None, source_row=None, priority=2,
+            source_col=None, source_row=None, priority=3,
             transform="lookup_by_source_slug",
-            rule_id=build_rule_id("contract", "partnerId", chosen_slug, 2),
+            rule_id=build_rule_id("contract", "partnerId", chosen_slug, 3),
             conflicts_ignored=[],
             notes=f"Résolu depuis le slug source ({chosen_slug}) via partners.SLUG_TO_PARTNER.",
         ))

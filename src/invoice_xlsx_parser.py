@@ -192,11 +192,42 @@ _LESSOR_FILENAME_HINTS = {
 
 
 def detect_lessor_from_filename(filename: str) -> str:
-    """Return ``ayvens`` / ``arval`` / ``autre`` based on filename hints."""
+    """Return a canonical lessor name based on filename hints.
+
+    Resolution order :
+
+    1. Hardcoded fast-path for Ayvens & Arval (most common loueurs in
+       France) — kept verbatim so existing wiring stays untouched.
+    2. Jalon 5.3.20 — full scan against the
+       :data:`partners.PARTNERS` registry. If the filename contains a
+       known partner name (Alphabet, Athlon, Leasys, Agilauto, VW Bank,
+       …), we return its canonical key so the contract engine can
+       resolve the matching UUID via :func:`partners.resolve_partner_id`.
+       This is the « belt » to the client_file Leaser column's
+       « braces » (Jalon 5.3.19) — it kicks in when the client_file
+       doesn't declare the lessor explicitly.
+    3. Fallback ``"autre"`` when nothing matches.
+    """
     low = (filename or "").lower()
+
+    # Fast-path : Ayvens / Arval (and ALD / Leaseplan aliases).
     for key, lessor in _LESSOR_FILENAME_HINTS.items():
         if key in low:
             return lessor
+
+    # Wider scan against every name in partner_index.csv.
+    try:
+        from .partners import PARTNERS
+    except Exception:
+        PARTNERS = {}
+    # Sort by length descending so longer names match first ("ayvens nl"
+    # before "ayvens", "volkswagen bank" before "vw bank", etc.).
+    for partner_key in sorted(PARTNERS.keys(), key=len, reverse=True):
+        if not partner_key or len(partner_key) < 3:
+            continue
+        if partner_key in low:
+            return partner_key
+
     return "autre"
 
 
@@ -204,7 +235,11 @@ def lessor_to_slug(lessor: str) -> str:
     """Map the lessor inferred from the file to its engine source slug.
 
     The slug is one of the ``*_facture_pdf`` slugs the contract engine
-    already knows — that way no new YAML rules are needed.
+    already knows — that way no new YAML rules are needed. Lessors
+    other than Ayvens / Arval (Alphabet, Athlon, Leasys, …) all route
+    to ``autre_loueur_facture_pdf`` ; their UUID will be resolved by
+    the contract engine post-pass via the ``lessor`` column attached
+    to each row by :func:`parse_etat_depenses_to_dataframe`.
     """
     table = {
         "ayvens": "ayvens_facture_pdf",
