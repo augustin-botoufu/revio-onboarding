@@ -1032,33 +1032,102 @@ def _postpass_normalize_client_total_flavour(
         ))
 
 
+# Column-name candidates to scan in the client_file when looking for an
+# explicit lessor declaration (Jalon 5.3.19). Matched case-insensitive,
+# accents stripped. The first column that exists in the file wins.
+_CLIENT_LESSOR_COLUMN_HINTS = (
+    "leaser", "loueur", "bailleur", "lessor",
+    "partner", "partenaire", "fournisseur",
+)
+
+
+def _find_client_lessor_column(client_df: pd.DataFrame) -> Optional[str]:
+    """Locate the column in ``client_df`` that declares the lessor.
+
+    Returns the original column name if a match is found, otherwise
+    None. Matching is accent-insensitive and case-insensitive, so
+    ``Leaser`` / ``Bailleur`` / ``loueur`` / ``LESSOR`` all resolve.
+    """
+    if client_df is None or client_df.empty:
+        return None
+    import unicodedata
+    def _norm(s: Any) -> str:
+        if s is None:
+            return ""
+        s = unicodedata.normalize("NFKD", str(s))
+        return "".join(c for c in s if not unicodedata.combining(c)).strip().lower()
+    norm_to_orig = {_norm(c): c for c in client_df.columns if c is not None}
+    for hint in _CLIENT_LESSOR_COLUMN_HINTS:
+        if hint in norm_to_orig:
+            return norm_to_orig[hint]
+    return None
+
+
 def _postpass_resolve_partner_id(
     out_df: pd.DataFrame,
     source_by_cell: dict,
     indexed_sources: dict[str, pd.DataFrame],
     lineage: LineageStore,
 ) -> None:
-    """Fill ``partnerId`` from the lessor slug whose source contains the row.
+    """Fill ``partnerId`` from the lessor — multi-source resolution.
 
-    Jalon 5.2.2 — for each contract row, we walk
-    :data:`_PARTNER_ATTRIBUTION_ORDER` and pick the first slug that has
-    the row's plate key in its DataFrame. The matching partnerId UUID is
-    pulled from :func:`partners.resolve_partner_id_for_slug`.
+    Resolution order (Jalon 5.3.19) :
 
-    Why a post-pass and not a YAML rule?
-    Because the YAML rules pre-Jalon-5.2 only knew how to read VALUES from
-    a source column — they couldn't say "use the SLUG as the value source".
-    The previous attempt declared ``source: backoffice`` with a marker
-    transform (``lookup_by_source_slug``) which never resolved → 100% of
-    contracts shipped without partnerId, blocking the Revio import.
+    **Priority 1 — Client_file declarative column.** When the client's
+    file has a ``Leaser`` / ``Loueur`` / ``Bailleur`` / ``Lessor`` /
+    ``Partner`` / ``Partenaire`` / ``Fournisseur`` column, we read the
+    name for that plate (e.g. « AYVENS », « VW BANK », « FREE2MOVE »)
+    and resolve it via :func:`partners.resolve_partner_id` — which
+    knows about aliases (FREE2MOVE → Leasys, ALD → Ayvens, etc.). This
+    is **declarative client truth** : the customer himself tells us
+    who the lessor is, per vehicle.
+
+    **Priority 2 — Engine source slug** (Jalon 5.2.2 fallback). If no
+    declarative column is found, we walk
+    :data:`_PARTNER_ATTRIBUTION_ORDER` and pick the first slug that
+    contains the plate. The matching partnerId UUID comes from
+    :func:`partners.resolve_partner_id_for_slug`. Limited to known
+    Arval / Ayvens slugs ; ``autre_loueur_*`` are deliberately skipped
+    so we never silently attribute the wrong UUID.
     """
     if "partnerId" not in out_df.columns:
         return
     # Lazy import so partners.py stays decoupled from the engine.
-    from .partners import resolve_partner_id_for_slug
+    from .partners import resolve_partner_id, resolve_partner_id_for_slug
+
+    # ── Priority 1 setup : find the client_file declarative column ──
+    client_df = indexed_sources.get("client_file")
+    lessor_col = _find_client_lessor_column(client_df) if client_df is not None else None
+
     for key in out_df.index:
         if not _is_null(out_df.at[key, "partnerId"]):
             continue
+
+        # ── Priority 1 — client_file Leaser/Loueur column ──
+        if lessor_col and client_df is not None and key in client_df.index:
+            raw_lessor = client_df.at[key, lessor_col]
+            if not _is_null(raw_lessor):
+                resolved = resolve_partner_id(str(raw_lessor))
+                if resolved:
+                    out_df.at[key, "partnerId"] = resolved
+                    source_by_cell[(key, "partnerId")] = "client_file"
+                    lineage.record(LineageRecord(
+                        table="contract", key=key, field="partnerId",
+                        value=resolved, source_used="client_file",
+                        source_col=lessor_col, source_row=None, priority=1,
+                        transform="lookup_by_lessor_name",
+                        rule_id=build_rule_id("contract", "partnerId", "client_file", 1),
+                        conflicts_ignored=[],
+                        notes=(
+                            f"Résolu depuis client_file colonne « {lessor_col} » = "
+                            f"{str(raw_lessor)!r} via partners.resolve_partner_id."
+                        ),
+                    ))
+                    continue
+                # else: lessor name not found in partner_index — fall through
+                # to the slug-based attribution below.
+
+        # ── Priority 2 — slug-based attribution (Jalon 5.2.2 fallback) ──
         chosen_slug = None
         for slug in _PARTNER_ATTRIBUTION_ORDER:
             df_src = indexed_sources.get(slug)
@@ -1077,9 +1146,9 @@ def _postpass_resolve_partner_id(
         lineage.record(LineageRecord(
             table="contract", key=key, field="partnerId",
             value=partner_id, source_used=chosen_slug,
-            source_col=None, source_row=None, priority=1,
+            source_col=None, source_row=None, priority=2,
             transform="lookup_by_source_slug",
-            rule_id=build_rule_id("contract", "partnerId", chosen_slug, 1),
+            rule_id=build_rule_id("contract", "partnerId", chosen_slug, 2),
             conflicts_ignored=[],
             notes=f"Résolu depuis le slug source ({chosen_slug}) via partners.SLUG_TO_PARTNER.",
         ))
