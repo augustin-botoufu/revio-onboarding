@@ -405,6 +405,15 @@ def map_client_usage(v: Any) -> Tuple[Optional[str], list[Warning]]:
     fiscalement TTC → ``private``. Other counts (4, 7, 9, …) raise a
     warning so the engine falls through to the next priority — they're
     too ambiguous to commit to a value automatically.
+
+    Jalon 5.3.25 — abréviations VU / VP / VS reconnues (constat
+    TECHSELL : HD-503-LG mappé en ``private`` parce que le client avait
+    écrit « VU » dans son EP interne, et seul ``map_loueur_usage`` les
+    reconnaissait). On accepte aussi les variantes longues classiques :
+    « véh société », « véhicule fonction », « VL », etc. La règle ne
+    déclenche que sur un mot **isolé** (regex \\b...\\b) pour éviter
+    qu'une cellule comme « VU 5 places » bascule à tort sur l'un des
+    libellés longs si une autre branche matchait par sous-chaîne.
     """
     warnings: list[Warning] = []
     if _is_empty(v):
@@ -426,11 +435,32 @@ def map_client_usage(v: Any) -> Tuple[Optional[str], list[Warning]]:
         )
         return None, warnings
 
-    if any(k in s for k in ["particulier", "personnel", "privé", "private"]):
+    # Jalon 5.3.25 — abréviations FR usuelles, en mot isolé. On regarde
+    # d'abord les codes courts (2-3 lettres) parce qu'ils sont sans
+    # ambiguïté ; les libellés longs ci-dessous restent en sous-chaîne.
+    import re as _re_abbr
+    _ABBR_RE = _re_abbr.compile(r"\b(vp|vu|vs|vl|vsl|vasp|ctte|ctt)\b")
+    abbr_match = _ABBR_RE.search(s)
+    if abbr_match:
+        code = abbr_match.group(1)
+        if code in ("vp", "vl"):
+            # VL = Véhicule Léger ≈ VP côté client (usage personnel/mixte).
+            return "private", warnings
+        if code in ("vu", "vasp", "ctte", "ctt"):
+            # VASP/CTTE = catégories fiscales utilitaires SIV.
+            return "utility", warnings
+        if code in ("vs", "vsl"):
+            # VS = Véhicule de Société (banquette condamnée, fiscalement HT).
+            return "service", warnings
+
+    if any(k in s for k in ["particulier", "personnel", "privé", "private",
+                            "véh perso", "veh perso"]):
         return "private", warnings
-    if any(k in s for k in ["utilitaire", "utility", "fourgon", "camionnette", "van"]):
+    if any(k in s for k in ["utilitaire", "utility", "fourgon", "camionnette",
+                            "camion", "van", "véhicule de transport"]):
         return "utility", warnings
-    if any(k in s for k in ["service", "fonction", "pool", "parc", "mission"]):
+    if any(k in s for k in ["service", "fonction", "société", "societe",
+                            "pool", "parc", "mission", "véh soc", "veh soc"]):
         return "service", warnings
     warnings.append(f"Usage client non reconnu: {v!r} — à confirmer (pas de fallback auto)")
     return None, warnings
