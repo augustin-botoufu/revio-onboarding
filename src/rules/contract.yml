@@ -787,7 +787,11 @@ fields:
     type: bool
     description: RC activée ?
     enum: TRUE / FALSE
-    notes: TRUE si civilLiabilityPrice > 0
+    notes: |
+      TRUE si civilLiabilityPrice > 0 (P1), sinon cascade depuis
+      allRisks/theftFireAndGlass/financialLoss/legalProtection (P2 —
+      Jalon 5.3.24), sinon forcé TRUE par le toggle « Assurance loueur
+      globale » de la page Moteur (P3 — Jalon 5.3.24).
     # Jalon 5.3.4 — source_label parlant (au lieu du brut "rule").
     rules:
     - priority: 1
@@ -795,6 +799,18 @@ fields:
       source_label: ⚙️ Calculé depuis civilLiabilityPrice > 0
       transform: rule_price_positive
       column: civilLiabilityPrice > 0
+    # Jalon 5.3.24 — cascade : qui dit assurance avancée dit RC.
+    - priority: 2
+      source: rule
+      source_label: ⚙️ Cascade ← allRisks / theftFireAndGlass / financialLoss / legalProtection
+      transform: rule_enabled_cascade
+      column: cascade ← *Enabled = TRUE
+    # Jalon 5.3.24 — toggle UI « Assurance loueur globale ».
+    - priority: 3
+      source: rule
+      source_label: 🛡️ Toggle « Assurance loueur globale »
+      transform: rule_force_civil_liability
+      column: toggle (page Moteur)
   legalProtectionEnabled:
     mandatory: false
     type: bool
@@ -914,7 +930,7 @@ fields:
     type: bool
     description: Véhicule de remplacement activé ?
     enum: TRUE / FALSE
-    notes: client_file uniquement
+    notes: client_file en P1, sinon dérivé du prix VR > 0 (Jalon 5.3.24)
     rules:
     - priority: 1
       source: client_file
@@ -922,6 +938,13 @@ fields:
       transform: bool_fr
       column: VR activé
       note: Q7 ✓
+    # Jalon 5.3.24 — fallback dérivé : si on a trouvé un prix VR > 0,
+    # alors la prestation est forcément activée.
+    - priority: 2
+      source: rule
+      source_label: ⚙️ Calculé depuis replacementVehiclePrice > 0
+      transform: rule_price_positive
+      column: replacementVehiclePrice > 0
   replacementVehicleCategory:
     mandatory: false
     type: enum
@@ -973,7 +996,9 @@ fields:
     type: bool
     description: Prestation pneus activée ?
     enum: TRUE / FALSE
-    notes: TRUE si plaque dans un fichier Pneus
+    notes: |
+      TRUE si plaque dans un fichier Pneus (P1/P2), tiresAmount > 0 (P3),
+      tiresPrice > 0 (P4 — Jalon 5.3.24) ou client_file (P5).
     # Jalon 5.3.3 — Arval P1 ex-æquo avec column_hint (cf. note maintenanceEnabled).
     rules:
     - priority: 1
@@ -999,6 +1024,13 @@ fields:
       source_label: client_file
       transform: bool_fr
       column: Pneus activés
+    # Jalon 5.3.24 — fallback dérivé : si on a un prix pneus > 0
+    # alors la prestation est activée même sans match dans pneus/amount.
+    - priority: 4
+      source: rule
+      source_label: ⚙️ Calculé depuis tiresPrice > 0
+      transform: rule_price_positive
+      column: tiresPrice > 0
   tiresType:
     mandatory: false
     type: enum

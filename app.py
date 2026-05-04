@@ -541,6 +541,13 @@ def _init_state():
         # use api_plaques.genreVCGNGC as the authoritative arbitrer when
         # no explicit HT/TTC mention is found.
         "vs_ht_strategy": "standard",       # "standard" or "api_plaques"
+        # --- Assurance loueur globale (Jalon 5.3.24) ---
+        # Toggle qui force ``civilLiabilityEnabled = TRUE`` sur tous les
+        # contrats, même quand aucune assurance n'a été retrouvée dans
+        # les fichiers loueur/client. Sert au cas « le client sait qu'il
+        # a souscrit l'assurance loueur sur toute la flotte mais on n'a
+        # pas le détail ligne à ligne ».
+        "force_civil_liability_enabled": False,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -2310,6 +2317,71 @@ def _render_engine_fleet_controls() -> None:
         f"<span style='background:#eff6ff;border:1px solid #bfdbfe;"
         f"border-radius:999px;padding:0.15rem 0.55rem;color:#1e40af'>"
         f"{_ht_pill}</span>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Row 3 : Assurance loueur globale (Jalon 5.3.24) ──────────────────
+    # Toggle qui force ``civilLiabilityEnabled = TRUE`` sur tous les
+    # contrats, même quand aucune assurance n'est trouvée dans les
+    # fichiers loueur/client. Cas d'usage : le client a souscrit une
+    # assurance loueur globale sur toute sa flotte, mais on n'a pas
+    # le détail ligne à ligne dans les fichiers reçus.
+    a_left, a_pop = st.columns([3, 1])
+    with a_left:
+        st.markdown(
+            "<div style='margin-top:0.85rem;font-weight:600;color:#1f2937;"
+            "font-size:0.95rem'>🛡️ Assurance loueur globale</div>"
+            "<div style='color:#6b7280;font-size:0.8rem;margin-bottom:0.4rem'>"
+            "Force <code>civilLiabilityEnabled = TRUE</code> sur toute la "
+            "flotte si activé.</div>",
+            unsafe_allow_html=True,
+        )
+    with a_pop:
+        with st.popover("ℹ️ Aide", use_container_width=True):
+            st.markdown(
+                "**Quand l'activer ?**\n\n"
+                "Coche cette option si tu sais que **toute la flotte** est "
+                "couverte par l'assurance du loueur (Responsabilité Civile), "
+                "mais que tu n'as **pas le détail ligne à ligne** dans les "
+                "fichiers reçus.\n\n"
+                "**Effet exact**\n\n"
+                "- `civilLiabilityEnabled` est forcé à **TRUE** sur tous les "
+                "contrats, même ceux où aucune assurance n'a été détectée.\n"
+                "- Aucun autre champ n'est affecté : prix, autres "
+                "couvertures, mapping… tout reste inchangé.\n"
+                "- Si la case n'est pas cochée et qu'une couverture est "
+                "détectée (ex. tous risques), `civilLiabilityEnabled` est "
+                "automatiquement déduit à TRUE (qui dit tous risques dit RC)."
+            )
+
+    _force_civil = st.toggle(
+        "Appliquer l'assurance loueur sur toute la flotte",
+        value=bool(st.session_state.get("force_civil_liability_enabled", False)),
+        key="force_civil_liability_toggle",
+        help="Si activé : civilLiabilityEnabled = TRUE pour tous les "
+             "contrats, même sans assurance retrouvée dans les fichiers.",
+    )
+    if _force_civil != st.session_state.get("force_civil_liability_enabled", False):
+        st.session_state.force_civil_liability_enabled = _force_civil
+
+    _force_pill = (
+        "🛡️ <code>RC forcée sur toute la flotte</code>"
+        if st.session_state.get("force_civil_liability_enabled", False)
+        else "🛡️ <code>RC seulement si détectée</code>"
+    )
+    _force_color = (
+        ("#ecfdf5", "#a7f3d0", "#065f46")
+        if st.session_state.get("force_civil_liability_enabled", False)
+        else ("#f3f4f6", "#e5e7eb", "#374151")
+    )
+    st.markdown(
+        "<div style='display:flex;gap:0.4rem;flex-wrap:wrap;"
+        "margin-top:0.35rem;font-size:0.8em'>"
+        f"<span style='background:{_force_color[0]};"
+        f"border:1px solid {_force_color[1]};"
+        f"border-radius:999px;padding:0.15rem 0.55rem;color:{_force_color[2]}'>"
+        f"{_force_pill}</span>"
         "</div>",
         unsafe_allow_html=True,
     )

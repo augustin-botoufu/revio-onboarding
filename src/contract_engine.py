@@ -300,6 +300,8 @@ def _apply_rule_transform(raw: Any, transform_name: str) -> tuple[Any, list[str]
                 "regex_mileage", "regex_start_date", "regex_restit_date",
                 # Rule-markers resolved at post-pass (need sibling fields).
                 "rule_price_positive", "rule_or",
+                # Jalon 5.3.24 — markers pour cascade *Enabled* et toggle UI.
+                "rule_enabled_cascade", "rule_force_civil_liability",
                 # Lookup transforms resolved at write time (partner index).
                 "lookup_partner", "lookup_by_source_slug"}:
         # These are markers consumed elsewhere — passthrough the raw
@@ -619,15 +621,25 @@ def _postpass_apply_ht_ttc_flavour(
 # Mapping <Enabled field> → <Price field> for the « TRUE si Price > 0 »
 # derivation rule. Keep aligned with contract.yml — every entry here must
 # have a matching ``rule_price_positive`` rule in the YAML.
+#
+# Jalon 5.3.24 — Ajout de ``tiresEnabled`` et ``replacementVehicleEnabled``.
+# Logique : « si on a trouvé un prix > 0 pour ces services, alors le
+# service est activé ». Compatible avec les autres origines (ex. présence
+# dans le fichier Pneus pour ``tiresEnabled``, ``tiresAmount > 0`` pour
+# le compteur), qui restent prioritaires : ce post-pass ne remplit
+# que les cellules encore NaN après les autres règles.
 _PRICE_TO_ENABLED_DERIVATION = {
-    "civilLiabilityEnabled":     "civilLiabilityPrice",
-    "legalProtectionEnabled":    "legalProtectionPrice",
-    "theftFireAndGlassEnabled":  "theftFireAndGlassPrice",
-    "allRisksEnabled":           "allRisksPrice",
-    "financialLossEnabled":      "financialLossPrice",
+    "civilLiabilityEnabled":      "civilLiabilityPrice",
+    "legalProtectionEnabled":     "legalProtectionPrice",
+    "theftFireAndGlassEnabled":   "theftFireAndGlassPrice",
+    "allRisksEnabled":            "allRisksPrice",
+    "financialLossEnabled":       "financialLossPrice",
     # maintenanceEnabled has rule_price_positive as P3 fallback after the
     # loueur EP sources (P1/P2). Including it here mirrors the YAML.
-    "maintenanceEnabled":        "maintenancePrice",
+    "maintenanceEnabled":         "maintenancePrice",
+    # Jalon 5.3.24 — services dérivés du prix.
+    "tiresEnabled":               "tiresPrice",
+    "replacementVehicleEnabled":  "replacementVehiclePrice",
 }
 
 
@@ -829,6 +841,144 @@ def _postpass_compute_enabled_from_presence(
                 conflicts_ignored=[],
                 notes=f"Plaque trouvée dans {chosen_slug} → TRUE.",
             ))
+
+
+# ── Jalon 5.3.24 ─────────────────────────────────────────────────────
+# Cascades entre *Enabled* + toggle « assurance loueur globale ».
+# Documentation utilisateur : voir l'expander « 🛡️ Assurance loueur
+# globale » dans la page Moteur.
+# ──────────────────────────────────────────────────────────────────────
+
+# Mapping <Enabled> → liste de <Enabled> qui, si TRUE, impliquent la
+# souscription du premier. Concrètement : si tu as souscrit Tous Risques,
+# Vol-Incendie-Bris, Perte Financière, Protection Juridique ou
+# Maintenance, alors la Responsabilité Civile (civilLiabilityEnabled)
+# est forcément TRUE — c'est l'assurance de base qui sous-tend toutes
+# les autres couvertures. Si on ajoute d'autres cascades plus tard,
+# elles passeront par cette table.
+_ENABLED_IMPLIES_CASCADE: dict[str, tuple[str, ...]] = {
+    "civilLiabilityEnabled": (
+        "allRisksEnabled",
+        "theftFireAndGlassEnabled",
+        "financialLossEnabled",
+        "legalProtectionEnabled",
+    ),
+}
+
+
+def _read_force_civil_liability_enabled() -> bool:
+    """Retourne ``True`` si le toggle « Assurance loueur globale »
+    a été coché dans la page Moteur (session_state).
+
+    Falls back to ``False`` quand streamlit n'est pas chargé (tests,
+    scripts) ou que la clé est manquante : par défaut on ne force rien
+    et le comportement reste celui des autres post-passes.
+    """
+    try:
+        import streamlit as st
+        return bool(st.session_state.get("force_civil_liability_enabled", False))
+    except Exception:
+        return False
+
+
+def _postpass_imply_enabled_cascade(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    lineage: LineageStore,
+) -> None:
+    """Propage les implications logiques entre *Enabled* booléens.
+
+    Jalon 5.3.24 — règle métier : si on a détecté qu'un contrat possède
+    une couverture *avancée* (Tous Risques, Vol-Incendie-Bris, Perte
+    Financière, Protection Juridique), alors la Responsabilité Civile
+    est nécessairement souscrite — c'est la couche de base de toutes
+    les assurances auto. Avant ce post-pass, ``civilLiabilityEnabled``
+    pouvait rester vide alors qu'``allRisksEnabled = TRUE`` parce que
+    le prix RC était noyé dans le prix Tous Risques (une seule ligne
+    facture pour les deux).
+
+    On ne met jamais TRUE par-dessus une valeur déjà posée — si une
+    règle prioritaire a posé FALSE explicitement on respecte ça.
+    """
+    for target, implications in _ENABLED_IMPLIES_CASCADE.items():
+        if target not in out_df.columns:
+            continue
+        for key in out_df.index:
+            current = out_df.at[key, target]
+            if not _is_null(current):
+                continue
+            triggered_by: list[str] = []
+            for src_field in implications:
+                if src_field not in out_df.columns:
+                    continue
+                val = out_df.at[key, src_field]
+                if val is True:
+                    triggered_by.append(src_field)
+            if not triggered_by:
+                continue
+            out_df.at[key, target] = True
+            source_by_cell[(key, target)] = "rule_engine"
+            triggers_str = ", ".join(triggered_by)
+            lineage.record(LineageRecord(
+                table="contract", key=key, field=target,
+                value=True, source_used="rule_engine",
+                source_col=f"cascade ← {triggers_str}", source_row=None,
+                priority=99, transform="rule_enabled_cascade",
+                rule_id=build_rule_id("contract", target, "rule_engine", 99),
+                conflicts_ignored=[],
+                notes=(
+                    f"Cascade implicite : {triggers_str} = TRUE → "
+                    f"{target} = TRUE (qui dit assurance avancée dit "
+                    f"Responsabilité Civile)."
+                ),
+            ))
+
+
+def _postpass_force_civil_liability(
+    out_df: pd.DataFrame,
+    source_by_cell: dict,
+    lineage: LineageStore,
+) -> None:
+    """Force ``civilLiabilityEnabled = TRUE`` sur tous les contrats si
+    le toggle « Assurance loueur globale » est activé dans l'UI.
+
+    Jalon 5.3.24 — feature client-driven. Le client sait qu'il a
+    souscrit une assurance loueur sur toute la flotte mais on n'a pas
+    le détail ligne à ligne dans les fichiers reçus. Plutôt que de
+    laisser tous les contrats sortir avec ``civilLiabilityEnabled``
+    vide, on coche le toggle et on force TRUE partout.
+
+    Override comportemental : on **écrase** même les valeurs FALSE
+    posées par d'autres règles, parce que le toggle est un signal
+    explicite de l'utilisateur (« je sais mieux que tes fichiers »).
+    Si l'utilisateur veut retomber sur l'inférence automatique, il
+    décoche le toggle.
+    """
+    if not _read_force_civil_liability_enabled():
+        return
+    target = "civilLiabilityEnabled"
+    if target not in out_df.columns:
+        return
+    for key in out_df.index:
+        current = out_df.at[key, target]
+        if current is True:
+            continue
+        out_df.at[key, target] = True
+        source_by_cell[(key, target)] = "rule_engine"
+        lineage.record(LineageRecord(
+            table="contract", key=key, field=target,
+            value=True, source_used="rule_engine",
+            source_col="toggle « Assurance loueur globale »",
+            source_row=None,
+            priority=99, transform="rule_force_civil_liability",
+            rule_id=build_rule_id("contract", target, "rule_engine", 99),
+            conflicts_ignored=[],
+            notes=(
+                "Forcé à TRUE par l'option « Assurance loueur globale » "
+                "(page Moteur). Avant: "
+                f"{current!r}."
+            ),
+        ))
 
 
 # Jalon 5.3.15 — HT/TTC detection for client_file totalPrice.
@@ -1637,9 +1787,18 @@ def apply_rules(
     )
     # Jalon 5.3.7 — derive *Enabled booleans from the matching *Price.
     # Must run AFTER the flavour fix so the price has its final value.
+    # Jalon 5.3.24 — étendu à tiresEnabled / replacementVehicleEnabled.
     _postpass_compute_enabled_from_price(out_df, source_by_cell, lineage)
     # Jalon 5.3.7 — derive tiresEnabled from presence in pneus sources.
     _postpass_compute_enabled_from_presence(out_df, source_by_cell, indexed, lineage)
+    # Jalon 5.3.24 — cascade allRisks/etc. → civilLiabilityEnabled = TRUE.
+    # Doit tourner après les deux post-passes ci-dessus, qui ont fini de
+    # remplir les *Enabled à partir des prix / présence.
+    _postpass_imply_enabled_cascade(out_df, source_by_cell, lineage)
+    # Jalon 5.3.24 — toggle « Assurance loueur globale » : si activé,
+    # force civilLiabilityEnabled = TRUE partout. Doit tourner en
+    # **dernier** pour écraser les éventuels FALSE posés en amont.
+    _postpass_force_civil_liability(out_df, source_by_cell, lineage)
     # Jalon 5.2.2 — resolve Revio partnerId UUID from the lessor slug
     # whose source carries the row. Without this, partnerId stays empty
     # and the contract can't be imported into Revio.
