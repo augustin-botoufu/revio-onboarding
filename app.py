@@ -4503,6 +4503,129 @@ def _render_contract_unknown_columns_ui(requests: list, engine_files: dict) -> N
         "inutile de refaire le même mapping."
     )
 
+    # ── Jalon 5.3.30 ─ Bouton « Tout mapper en IA » global (Contract) ─────
+    # Symétrique à 5.3.28 côté Vehicle : un seul clic pour lancer Claude
+    # sur TOUS les fichiers mappables côté Contract, au lieu de cliquer
+    # file-by-file dans chaque expander. Réutilise propose_mapping avec
+    # le schéma "contract".
+    _bulk_l, _bulk_r = st.columns([1, 2])
+    with _bulk_l:
+        _bulk_clicked_c = st.button(
+            f"🤖 Tout mapper en IA ({len(mappable_files)})",
+            key="contract_bulk_ai_map_all",
+            use_container_width=True,
+            help=(
+                "Lance Claude sur tous les fichiers ci-dessous d'un coup, "
+                "applique les mappings proposés (champs contractuels), "
+                "puis tu pourras vérifier et ajuster fichier par fichier."
+            ),
+        )
+    with _bulk_r:
+        st.caption(
+            f"💡 Lance l'IA en batch sur tes **{len(mappable_files)} "
+            f"fichier{'s' if len(mappable_files) > 1 else ''}** Contract "
+            "au lieu de cliquer un par un."
+        )
+
+    if _bulk_clicked_c:
+        _bulk_total_c = 0
+        _bulk_per_file_c: list[dict] = []
+        with st.spinner(
+            f"Claude analyse {len(mappable_files)} fichier"
+            f"{'s' if len(mappable_files) > 1 else ''}..."
+        ):
+            for _fk, _fi in mappable_files:
+                _fdf = _fi["df"]
+                _fslug = _fi["slug"]
+                _fname = _fi.get("filename") or _fk
+                if _fi.get("sheet_name"):
+                    _fname += f" [{_fi['sheet_name']}]"
+
+                # Recompute offerable_fields per file (même logique que la
+                # boucle ci-dessous : client_file = tous les champs YAML,
+                # sinon ceux déclarés pour ce slug).
+                if _fslug == "client_file":
+                    _offerable: list[str] = []
+                    for _, _fs in fields_by_slug.items():
+                        for _f in _fs:
+                            if _f not in _offerable:
+                                _offerable.append(_f)
+                    for _f in fields_by_slug.get("client_file", []):
+                        if _f not in _offerable:
+                            _offerable.append(_f)
+                else:
+                    _offerable = list(fields_by_slug.get(_fslug, []))
+
+                _result = propose_mapping(
+                    _fdf, "contract",
+                    st.session_state.get("user_instructions", ""),
+                )
+                if "_error" in _result:
+                    _bulk_per_file_c.append({
+                        "filename": _fname, "mapped": 0,
+                        "error": _result["_error"],
+                    })
+                    continue
+                _proposed = _result.get("mapping", {})
+                _valid_cols = {str(c) for c in _fdf.columns}
+                _nb = 0
+                for _field in _offerable:
+                    _src_col = _proposed.get(_field)
+                    _widget_key = (
+                        f"contract_override_{_fslug}_{_field}_{_fk}"
+                    )
+                    _override_key = (_fk, _field)
+                    if _src_col and _src_col in _valid_cols:
+                        st.session_state.engine_overrides[_override_key] = _src_col
+                        st.session_state[_widget_key] = _src_col
+                        _nb += 1
+                    # Pas de clobber si l'IA ne renvoie rien : on garde
+                    # un éventuel mapping manuel posé avant.
+                _bulk_per_file_c.append({
+                    "filename": _fname, "mapped": _nb, "error": None,
+                })
+                _bulk_total_c += _nb
+        st.session_state["contract_bulk_ai_summary"] = {
+            "total": _bulk_total_c,
+            "files": _bulk_per_file_c,
+            "n_files": len(mappable_files),
+        }
+        st.rerun()
+
+    # Affichage post-rerun du récap (Jalon 5.3.30).
+    _bulk_summary_c = st.session_state.pop("contract_bulk_ai_summary", None)
+    if _bulk_summary_c:
+        if _bulk_summary_c["total"] > 0:
+            st.success(
+                f"✅ Mapping IA appliqué — **{_bulk_summary_c['total']}** champ"
+                f"{'s' if _bulk_summary_c['total'] > 1 else ''} mappé"
+                f"{'s' if _bulk_summary_c['total'] > 1 else ''} sur "
+                f"**{_bulk_summary_c['n_files']}** fichier"
+                f"{'s' if _bulk_summary_c['n_files'] > 1 else ''}. "
+                "Vérifie ci-dessous fichier par fichier avant de lancer "
+                "le moteur Contract."
+            )
+        else:
+            st.warning(
+                "🤖 L'IA n'a proposé aucun mapping exploitable. "
+                "Mappe manuellement ci-dessous."
+            )
+        _detail_lines_c = []
+        for _row in _bulk_summary_c["files"]:
+            if _row["error"]:
+                _detail_lines_c.append(f"❌ **{_row['filename']}** : {_row['error']}")
+            elif _row["mapped"] == 0:
+                _detail_lines_c.append(f"⚠️ **{_row['filename']}** : 0 champ mappé")
+            else:
+                _detail_lines_c.append(
+                    f"• **{_row['filename']}** : {_row['mapped']} champ"
+                    f"{'s' if _row['mapped'] > 1 else ''}"
+                )
+        if _detail_lines_c:
+            with st.expander("Détail par fichier", expanded=False):
+                for _line in _detail_lines_c:
+                    st.markdown(_line)
+
     for file_key, file_info in mappable_files:
         df = file_info["df"]
         slug = file_info["slug"]
