@@ -1185,6 +1185,125 @@ def _render_manual_mapping_section(engine_files: dict) -> None:
             "besoin. Les champs non mappés seront ignorés pour ce fichier."
         )
 
+    # ── Jalon 5.3.28 ─ Bouton « Tout mapper en IA » global ──────────────
+    # UX raccourci : un seul clic pour lancer l'IA sur TOUS les fichiers
+    # qui attendent un mapping (vs. cliquer fichier par fichier dans la
+    # boucle plus bas). On garde la possibilité de relancer l'IA sur un
+    # fichier individuellement après — ça écrase juste les overrides
+    # existants pour ce fichier.
+    if needs_action:
+        _bulk_l, _bulk_r = st.columns([1, 2])
+        with _bulk_l:
+            _bulk_clicked = st.button(
+                f"🤖 Tout mapper en IA ({len(needs_action)})",
+                key="engine_bulk_ai_map_all",
+                use_container_width=True,
+                help=(
+                    "Lance Claude sur tous les fichiers ci-dessous d'un coup, "
+                    "applique les mappings proposés, puis tu pourras vérifier "
+                    "et ajuster fichier par fichier. Pratique quand tu as "
+                    "plusieurs loueurs à mapper."
+                ),
+            )
+        with _bulk_r:
+            st.caption(
+                f"💡 Lance l'IA en batch sur tes **{len(needs_action)} "
+                f"fichier{'s' if len(needs_action) > 1 else ''}** à mapper "
+                "au lieu de cliquer un par un. Tu vérifies ensuite ci-dessous."
+            )
+
+        if _bulk_clicked:
+            _bulk_total = 0
+            _bulk_per_file: list[dict] = []
+            with st.spinner(
+                f"Claude analyse {len(needs_action)} fichier"
+                f"{'s' if len(needs_action) > 1 else ''}..."
+            ):
+                for _fk, _fi in needs_action:
+                    _fdf = _fi["df"]
+                    _fslug = _fi["slug"]
+                    _fname = _fi["filename"] + (
+                        f" [{_fi['sheet_name']}]" if _fi.get("sheet_name") else ""
+                    )
+                    _result = propose_mapping(
+                        _fdf, "vehicle",
+                        st.session_state.get("user_instructions", ""),
+                    )
+                    if "_error" in _result:
+                        _bulk_per_file.append({
+                            "filename": _fname, "mapped": 0,
+                            "error": _result["_error"],
+                        })
+                        continue
+                    _proposed = _result.get("mapping", {})
+                    _valid_cols = {str(c) for c in _fdf.columns}
+                    _nb = 0
+                    for _field in MANUAL_MAPPABLE_FIELDS:
+                        _src_col = _proposed.get(_field)
+                        _widget_key = (
+                            f"engine_override_{_fslug}_{_field}_{_fk}"
+                        )
+                        _override_key = (_fk, _field)
+                        if _src_col and _src_col in _valid_cols:
+                            st.session_state.engine_overrides[_override_key] = _src_col
+                            st.session_state[_widget_key] = _src_col
+                            _nb += 1
+                        else:
+                            # Don't clobber existing per-file mappings : if the
+                            # bulk IA returns nothing for a field but the user
+                            # had already mapped it manually before, we keep
+                            # that manual choice. (Different from the per-file
+                            # button which resets — voulu ici car bulk = best
+                            # effort sur l'ensemble.)
+                            pass
+                    _bulk_per_file.append({
+                        "filename": _fname, "mapped": _nb, "error": None,
+                    })
+                    _bulk_total += _nb
+            # Stash le résumé en session_state pour qu'il survive au rerun
+            # et reste visible après rafraîchissement des selectboxes.
+            st.session_state["engine_bulk_ai_summary"] = {
+                "total": _bulk_total,
+                "files": _bulk_per_file,
+                "n_files": len(needs_action),
+            }
+            st.rerun()
+
+    # Affichage post-rerun du récap du bulk mapping (Jalon 5.3.28).
+    _bulk_summary = st.session_state.pop("engine_bulk_ai_summary", None)
+    if _bulk_summary:
+        if _bulk_summary["total"] > 0:
+            st.success(
+                f"✅ Mapping IA appliqué — **{_bulk_summary['total']}** champ"
+                f"{'s' if _bulk_summary['total'] > 1 else ''} mappé"
+                f"{'s' if _bulk_summary['total'] > 1 else ''} sur "
+                f"**{_bulk_summary['n_files']}** fichier"
+                f"{'s' if _bulk_summary['n_files'] > 1 else ''}. "
+                "Vérifie ci-dessous fichier par fichier avant de lancer le "
+                "moteur."
+            )
+        else:
+            st.warning(
+                "🤖 L'IA n'a proposé aucun mapping exploitable. "
+                "Mappe manuellement ci-dessous."
+            )
+        # Détail par fichier (compact)
+        _detail_lines = []
+        for _row in _bulk_summary["files"]:
+            if _row["error"]:
+                _detail_lines.append(f"❌ **{_row['filename']}** : {_row['error']}")
+            elif _row["mapped"] == 0:
+                _detail_lines.append(f"⚠️ **{_row['filename']}** : 0 champ mappé")
+            else:
+                _detail_lines.append(
+                    f"• **{_row['filename']}** : {_row['mapped']} champ"
+                    f"{'s' if _row['mapped'] > 1 else ''}"
+                )
+        if _detail_lines:
+            with st.expander("Détail par fichier", expanded=False):
+                for _line in _detail_lines:
+                    st.markdown(_line)
+
     # ---- Zone compacte : fichiers reconnus automatiquement ----
     if recognized_auto:
         n_reco = len(recognized_auto)
