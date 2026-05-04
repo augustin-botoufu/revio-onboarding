@@ -1,7 +1,7 @@
 """Value-level normalization memory (Jalon 2.7).
 
 Each enum-typed Revio field (e.g. ``vehicle.motorisation`` with allowed
-values ``diesel/gas/hybrid/electric``) gets a dictionary of
+values ``diesel/gas/hybrid/ev``) gets a dictionary of
 ``raw_value → target`` that grows as we see new data. Three sources of
 entries:
 

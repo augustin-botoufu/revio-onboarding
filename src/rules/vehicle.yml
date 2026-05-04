@@ -280,18 +280,20 @@ fields:
   motorisation:
     mandatory: false
     description: Type de motorisation
+    # Jalon 5.3.29 — Revio attend ``ev`` (pas ``electric``) pour le 100%
+    # électrique. Hydrogène mappé sur ``ev`` faute de catégorie dédiée.
     allowed_values:
     - diesel
     - gas
     - hybrid
-    - electric
+    - ev
     rules:
     - priority: 1
       source: api_plaques
       source_label: API Plaques
       column: energieNGC
       transform: map_siv_motorisation
-      transform_doc: 'Map codes SIV: GO→diesel, ES→gas, EL→electric, EH/ES+HY→hybrid'
+      transform_doc: 'Map codes SIV: GO→diesel, ES→gas, EL→ev, EH/ES+HY→hybrid'
       example: GO
       note: Codes officiels SIV (colonne `energieNGC` de l'API Plaques)
     - priority: 2
@@ -299,7 +301,7 @@ fields:
       source_label: Arval - État de parc (UAT)
       column: Carburant
       transform: map_loueur_motorisation
-      transform_doc: 'Map: Diesel→diesel, Essence→gas, Hybride→hybrid, Electrique→electric'
+      transform_doc: 'Map: Diesel→diesel, Essence→gas, Hybride→hybrid, Electrique→ev'
       example: Diesel
       note: Ex-æquo loueur
     - priority: 2
@@ -313,7 +315,7 @@ fields:
       source_label: Ayvens - État de parc
       column: Energie
       transform: map_loueur_motorisation
-      transform_doc: 'Map: Gazole→diesel, Essence→gas, Hybride→hybrid, Électrique→electric, Hybride rechargeable→hybrid'
+      transform_doc: 'Map: Gazole→diesel, Essence→gas, Hybride→hybrid, Électrique→ev, Hybride rechargeable→hybrid'
       example: Gazole
       note: Ex-æquo loueur
     - priority: 3
@@ -328,7 +330,7 @@ fields:
       source_label: Fichier véhicules client (interne)
       column_hint: à mapper manuellement (fallback IA)
       transform: map_loueur_motorisation
-      transform_doc: Map libellés libres → diesel/gas/hybrid/electric (prompt utilisateur si ambigu)
+      transform_doc: Map libellés libres → diesel/gas/hybrid/ev (prompt utilisateur si ambigu)
       example: Diesel
       note: Fallback
   electricAutonomy:

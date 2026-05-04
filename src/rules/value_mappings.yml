@@ -2811,61 +2811,61 @@ mappings:
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
   - raw: 100% électrique
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: BEV
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: Electric
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: EV
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: H2
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: Hydrogène
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: Électrique
-    target: electric
+    target: ev
     status: validated
     source: seed
     created_at: '2026-04-22'
     updated_at: '2026-04-22'
     validated_at: '2026-04-22'
-    note: Hydrogène → electric faute de catégorie dédiée dans Revio.
+    note: Hydrogène → ev faute de catégorie dédiée dans Revio.
   - raw: Biogaz
     target: gas
     status: validated

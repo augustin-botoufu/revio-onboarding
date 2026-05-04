@@ -25,7 +25,7 @@ VEHICLE_FIELDS = [
     FieldSpec("brand"),
     FieldSpec("model"),
     FieldSpec("variant"),
-    FieldSpec("motorisation", allowed_values=["diesel", "gas", "hybrid", "electric"]),
+    FieldSpec("motorisation", allowed_values=["diesel", "gas", "hybrid", "ev"]),
     FieldSpec("electricAutonomy", format_hint="km, integer"),
     FieldSpec("electricEnginePower", format_hint="kW, integer"),
     FieldSpec("weight", format_hint="kg, integer"),

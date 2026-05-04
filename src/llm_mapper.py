@@ -238,7 +238,7 @@ Règles:
     * "Hybride"/"PHEV"/"HEV" → motorisation hybrid
     * "Hybride-diesel" ou "Hybride-essence" → motorisation hybrid (c'est une voiture
       hybride qui met du diesel/essence ; JAMAIS diesel ni gas)
-    * "Électrique"/"EV"/"Hydrogène" → motorisation electric
+    * "Électrique"/"EV"/"Hydrogène" → motorisation ev
     * "Oui"/"Yes"/"1"/"Vrai"/"X" → TRUE ; "Non"/"No"/"0"/"Faux" → FALSE
 - Pour les notes : indique brièvement les cas ambigus ou les valeurs que tu as mappées null.
 """

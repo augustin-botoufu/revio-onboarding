@@ -291,6 +291,9 @@ def normalize_country_code(v: Any) -> Tuple[Optional[str], list[Warning]]:
 
 
 # SIV codes (carte grise) -> Revio motorisation
+# Jalon 5.3.29 — Revio attend la valeur ``ev`` (pas ``electric``) pour
+# tout ce qui est 100% électrique. Hydrogène traité comme ev faute de
+# catégorie dédiée côté Revio.
 _SIV_MOTORISATION = {
     "GO": "diesel",
     "GL": "diesel",
@@ -298,11 +301,11 @@ _SIV_MOTORISATION = {
     "EH": "hybrid",
     "EE": "hybrid",
     "PE": "hybrid",
-    "EL": "electric",
-    "ELEC": "electric",
+    "EL": "ev",
+    "ELEC": "ev",
     "GN": "gas",
     "GP": "gas",  # GPL
-    "H2": "electric",  # hydrogène — traité comme electric faute de catégorie dédiée
+    "H2": "ev",  # hydrogène — traité comme ev faute de catégorie dédiée
 }
 
 
@@ -327,8 +330,9 @@ def map_loueur_motorisation(v: Any) -> Tuple[Optional[str], list[Warning]]:
         return "hybrid", warnings
     if "hybride" in s or "hybrid" in s or s in {"hev", "mhev"}:
         return "hybrid", warnings
-    if "électrique" in s or "electrique" in s or "electric" in s or s == "bev":
-        return "electric", warnings
+    # Jalon 5.3.29 — Revio attend ``ev``, pas ``electric``.
+    if "électrique" in s or "electrique" in s or "electric" in s or s in {"bev", "ev"}:
+        return "ev", warnings
     if "gazole" in s or "diesel" in s or s in {"go", "d"}:
         return "diesel", warnings
     if "essence" in s or s in {"sp95", "sp98", "e85", "superéthanol", "superethanol"}:
