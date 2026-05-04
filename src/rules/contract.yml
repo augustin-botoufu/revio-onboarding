@@ -415,6 +415,19 @@ fields:
       column: Prix catalogue (NE JAMAIS PRENDRE)
       banned: true
       note: Valeur catalogue brut, pas remisée
+    # Jalon 5.3.26 — Arval AEN P1 ex-æquo avec column_hint : le nom
+    # de colonne du « prix net remisé » dans l'AEN Arval n'est pas stable
+    # (constat Augustin : « il peut varier »). Le flow « colonne non
+    # identifiée » propose le mapping à l'AM à l'upload ; quand l'AM
+    # laisse vide, la P2 prend le relais (arval_and / ayvens_aen / etc.).
+    # Rappel : NE JAMAIS mapper sur la colonne brute « Prix Véhicule TTC »
+    # (cf. règle P0 ci-dessus) — c'est la valeur catalogue avant remise.
+    - priority: 1
+      source: arval_aen
+      source_label: Arval - AEN
+      transform: float_fr
+      column_hint: à mapper manuellement (Prix remisé / Prix net — col loueur variable)
+      note: Prendre toujours net remisé. Refuser la colonne 'Prix Véhicule TTC' brute.
     - priority: 1
       source: arval_and
       source_label: arval_and
@@ -479,13 +492,26 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel RC.
-    notes: client_file P1, facture (rubrique RC) P2
+    notes: |
+      client_file P1 ex-æquo avec autre_loueur_etat_parc (col loueur
+      variable, mapping manuel à l'upload — Jalon 5.3.27) ; facture
+      (rubrique RC) P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix RC mensuel
+    # Jalon 5.3.27 — beaucoup d'EP « autre loueur » (Agilauto, Alphabet,
+    # ALD, etc.) détaillent les prix par prestation directement dans
+    # leur état de parc. Les noms de colonnes varient → column_hint +
+    # mapping manuel à l'upload.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer RC », « Prix RC »)
+      note: Ex-æquo avec client_file. EP loueur prioritaire si AM mappe la colonne.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -506,13 +532,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel protection juridique.
-    notes: client_file P1, facture P2
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix protection juridique
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer PJ »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -532,13 +565,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel vol / incendie / bris de glace.
-    notes: client_file P1, facture P2
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix vol/incendie/bris
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer Vol/Inc/Bris »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -558,13 +598,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel tous risques.
-    notes: client_file P1, facture (Assurance Auto Multirisques) P2
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix tous risques
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer Tous Risques »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -585,13 +632,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel perte financière.
-    notes: client_file P1, facture P2
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix perte financière
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer PF »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -611,13 +665,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel entretien.
-    notes: client_file P1, facture P2
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix entretien mensuel
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer Entretien »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -638,13 +699,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel véhicule de remplacement.
-    notes: client_file P1, facture P2
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2.
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix VR mensuel
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer VR »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
@@ -664,13 +732,20 @@ fields:
     mandatory: false
     type: float
     description: Prix mensuel pneus.
-    notes: client_file P1, facture P2 (hors avenants exceptionnels)
+    notes: client_file P1 ex-æquo autre_loueur_etat_parc (col variable) ; facture P2 (hors avenants exceptionnels).
     rules:
     - priority: 1
       source: client_file
       source_label: client_file
       transform: float_fr
       column: Prix pneus mensuel
+    # Jalon 5.3.27 — voir civilLiabilityPrice pour la doc.
+    - priority: 1
+      source: autre_loueur_etat_parc
+      source_label: État de parc autre loueur
+      transform: float_fr
+      column_hint: à mapper manuellement (col loueur variable — ex. « Loyer Pneus »)
+      note: Ex-æquo avec client_file.
     - priority: 2
       source: arval_facture_pdf
       source_label: arval_facture_pdf
