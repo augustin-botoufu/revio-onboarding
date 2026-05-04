@@ -16,8 +16,10 @@ layout::
     │   ├── contracts_tous.csv
     │   ├── contracts_<slug>.csv      (per fleet, plate-based)
     │   └── contracts_orphelins.csv   (contrats sans match client_file)
-    ├── drivers/                      (Jalon 5.1 — format-passthrough)
-    │   └── drivers_tous.csv
+    ├── drivers/                      (Jalon 5.1 + 5.3.23 fleet split)
+    │   ├── drivers_tous.csv
+    │   ├── drivers_<slug>.csv        (one file per fleet, plate-based)
+    │   └── drivers_non-rattache.csv  (drivers without a plate / unmapped)
     └── _lineage/                     (optional — parquet/jsonl sidecars)
         ├── vehicle.parquet
         └── contract.parquet
@@ -171,6 +173,7 @@ def build_master_xlsx(
     contract_orphan_df: Optional[pd.DataFrame] = None,
     contract_fleet_mapping: Optional[FleetMapping] = None,
     driver_df: Optional[pd.DataFrame] = None,
+    driver_fleet_mapping: Optional[FleetMapping] = None,
 ) -> bytes:
     """Build a workbook with one tab per (schema, fleet) + a global tab.
 
@@ -224,14 +227,26 @@ def build_master_xlsx(
                 desc = f"Contrats flotte « {fleet_name} »"
                 plan.append((sheet_name, desc, len(sub)))
 
-    # ---- DRIVER (Jalon 5.1) ----
-    # Driver table is a format-passthrough: no fleet split (driver ≠ plate),
-    # just a single "drivers — tous" tab next to vehicles / contrats so the
-    # AM opens one workbook and sees everything the engine produced.
+    # ---- DRIVER (Jalon 5.1 + 5.3.23 fleet split) ----
+    # Tous tab + per-fleet tabs (plate-based, shares fleet_mapping with
+    # Vehicle & Contract). A driver inherits the fleet of his
+    # ``assignPlate`` ; drivers without a plate land in UNASSIGNED_FLEET.
     if driver_df is not None and not driver_df.empty:
         ws_all = wb.create_sheet(safe_sheet_name("drivers — tous"))
         _write_df_to_sheet(ws_all, driver_df, "driver")
         plan.append((ws_all.title, "Tous les drivers", len(driver_df)))
+
+        if driver_fleet_mapping is not None and driver_fleet_mapping.is_active:
+            d_buckets = _split_drivers_by_fleet(driver_df, driver_fleet_mapping)
+            for fleet_name in _fleet_iter_order(d_buckets.keys()):
+                sub = d_buckets[fleet_name]
+                if sub.empty:
+                    continue
+                sheet_name = safe_sheet_name(f"drivers — {fleet_name}")
+                ws = wb.create_sheet(sheet_name)
+                _write_df_to_sheet(ws, sub, "driver")
+                desc = f"Drivers flotte « {fleet_name} »"
+                plan.append((sheet_name, desc, len(sub)))
 
     if contract_orphan_df is not None and not contract_orphan_df.empty:
         sheet_name = safe_sheet_name("contrats — orphelins")
@@ -264,6 +279,44 @@ def build_master_xlsx(
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def _split_drivers_by_fleet(
+    driver_df: pd.DataFrame,
+    fleet_mapping: FleetMapping,
+) -> dict[str, pd.DataFrame]:
+    """Split driver rows by fleet using the ``assignPlate`` column.
+
+    Jalon 5.3.23 — drivers inherit the fleet of their assigned vehicle
+    via the same plate-based ``fleet_mapping`` shared with Vehicle and
+    Contract. Drivers without an ``assignPlate`` (or with a plate
+    that's not in the mapping) fall into the :data:`UNASSIGNED_FLEET`
+    bucket — typically a fleet manager / pool driver / template row.
+
+    We deliberately do not raise an anomaly here : the absence of a
+    plate is a valid case for some drivers (HQ, sales nomades, …).
+    The Driver engine already surfaces « plaque inconnue / dupliquée »
+    anomalies upstream, this function is purely about the split.
+    """
+    if driver_df is None or driver_df.empty:
+        return {}
+    if "assignPlate" not in driver_df.columns:
+        # No plate column means we can't split — return everything in
+        # UNASSIGNED so the caller produces a single non-rattaché file.
+        return {UNASSIGNED_FLEET: driver_df.copy()}
+
+    plates_norm = driver_df["assignPlate"].map(
+        lambda p: plate_for_matching(p) or ""
+    )
+    p2f = fleet_mapping.plate_to_fleet
+
+    assigned = plates_norm.map(
+        lambda p: p2f.get(p, UNASSIGNED_FLEET) if p else UNASSIGNED_FLEET
+    )
+    out: dict[str, pd.DataFrame] = {}
+    for name, sub in driver_df.groupby(assigned, sort=False):
+        out[str(name)] = sub.copy()
+    return out
 
 
 def _split_contracts_by_fleet(
@@ -339,6 +392,7 @@ def build_output_zip(
     contract_fleet_mapping: Optional[FleetMapping] = None,
     driver_df: Optional[pd.DataFrame] = None,
     driver_errors_xlsx_bytes: Optional[bytes] = None,
+    driver_fleet_mapping: Optional[FleetMapping] = None,
     extra_files: Optional[dict[str, bytes]] = None,
     timestamp: Optional[datetime] = None,
 ) -> tuple[bytes, str]:
@@ -372,6 +426,7 @@ def build_output_zip(
             contract_orphan_df=contract_orphan_df,
             contract_fleet_mapping=contract_fleet_mapping,
             driver_df=driver_df,
+            driver_fleet_mapping=driver_fleet_mapping,
         )
         zf.writestr(f"{root}/onboarding_complet.xlsx", master_bytes)
 
@@ -420,10 +475,13 @@ def build_output_zip(
                 buf_orph.getvalue().encode("utf-8-sig"),
             )
 
-        # 3.b Drivers CSV (Jalon 5.1). Driver table is format-passthrough —
-        # a single ``drivers_tous.csv`` next to the master workbook. We write
-        # an internal helper column (``__source_file``) off before export so
-        # Revio's importer doesn't choke on an unknown column.
+        # 3.b Drivers CSV (Jalon 5.1 + 5.3.23 fleet split).
+        # ``drivers_tous.csv`` always written. Per-fleet ``drivers_<slug>.csv``
+        # files written when a fleet_mapping is active — drivers inherit
+        # the fleet of their ``assignPlate`` (plate-based, same logic as
+        # Contract). Drivers without a plate land in ``drivers_non-rattache.csv``.
+        # An internal helper column (``__source_file``) is dropped before
+        # export so Revio's importer doesn't choke.
         if driver_df is not None and not driver_df.empty:
             driver_export = driver_df.copy()
             if "__source_file" in driver_export.columns:
@@ -432,6 +490,17 @@ def build_output_zip(
                 f"{root}/drivers/drivers_tous.csv",
                 revio_csv_bytes(driver_export, "driver"),
             )
+            if driver_fleet_mapping is not None and driver_fleet_mapping.is_active:
+                d_buckets = _split_drivers_by_fleet(driver_export, driver_fleet_mapping)
+                for fleet_name in _fleet_iter_order(d_buckets.keys()):
+                    sub = d_buckets[fleet_name]
+                    if sub.empty:
+                        continue
+                    slug = slugify_fleet_name(fleet_name) or "fleet"
+                    zf.writestr(
+                        f"{root}/drivers/drivers_{slug}.csv",
+                        revio_csv_bytes(sub, "driver"),
+                    )
 
         # 4. Report / errors xlsx — passthroughs.
         if report_xlsx_bytes:

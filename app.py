@@ -2589,6 +2589,7 @@ def _render_unified_download() -> None:
             contract_fleet_mapping=fleet_mapping,  # shared fleet mapping by plate
             driver_df=driver_df,
             driver_errors_xlsx_bytes=driver_errors_bytes,
+            driver_fleet_mapping=fleet_mapping,  # plate-based, shared with Vehicle/Contract (Jalon 5.3.23)
             extra_files=lineage_bytes_by_name,
         )
         st.download_button(
