@@ -44,8 +44,8 @@ fields:
       column: Plaque d'immatriculation
       note: idem
     - priority: 99
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: cross_check
       column: Immatriculation / Plaque / N° Immat
       note: idem
@@ -116,8 +116,8 @@ fields:
       transform: strip
       column: Numéro de contrat
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: strip
       column: N° Contrat / Numéro contrat
     - priority: 1
@@ -185,8 +185,8 @@ fields:
       column: Durée de contrat
       note: En mois
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: int
       column: Durée contrat / Durée (M)
       note: En mois
@@ -238,8 +238,8 @@ fields:
       column: DATE DE DEBUT DE CONTRAT
       note: ISO déjà
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: date_any_to_iso
       column: Date début contrat
     - priority: 1
@@ -283,8 +283,8 @@ fields:
       transform: date_iso
       column: DATE DE FIN DE CONTRAT
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: date_any_to_iso
       column: Date fin contrat
     - priority: 1
@@ -327,8 +327,8 @@ fields:
       transform: int
       column: Kilométrage
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: int
       column: Km contrat / Kilométrage
     - priority: 1
@@ -366,8 +366,8 @@ fields:
     notes: 'Ayvens EP: KM tech Max (seul loueur à donner cette info)'
     rules:
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: int
       column: KM tech Max / Km max
     - priority: 1
@@ -749,8 +749,8 @@ fields:
       selon isHT
     rules:
     - priority: 1
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: float_fr
       column: Loyer périodique / Loyer mensuel
       note: idem
@@ -867,8 +867,8 @@ fields:
       column: Maintenance souscrite
       note: TRUE si ≠ vide et ≠ 'aucune prestation'
     - priority: 2
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: rule_field_present
       column: Maintenance souscrite
       note: idem
@@ -899,8 +899,8 @@ fields:
       column: Maintenance souscrite
       note: Mapping → any / specialist (2 valeurs seulement v2)
     - priority: 2
-      source: autre_loueur_ep
-      source_label: autre_loueur_ep
+      source: autre_loueur_etat_parc
+      source_label: autre_loueur_etat_parc
       transform: enum_mapping_2
       column: Maintenance souscrite
       note: idem
