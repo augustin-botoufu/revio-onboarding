@@ -850,18 +850,20 @@ def _postpass_compute_enabled_from_presence(
 # ──────────────────────────────────────────────────────────────────────
 
 # Mapping <Enabled> → liste de <Enabled> qui, si TRUE, impliquent la
-# souscription du premier. Concrètement : si tu as souscrit Tous Risques,
-# Vol-Incendie-Bris, Perte Financière, Protection Juridique ou
-# Maintenance, alors la Responsabilité Civile (civilLiabilityEnabled)
-# est forcément TRUE — c'est l'assurance de base qui sous-tend toutes
-# les autres couvertures. Si on ajoute d'autres cascades plus tard,
-# elles passeront par cette table.
+# souscription du premier.
+#
+# Jalon 5.3.31 — Cascade restreinte à ``allRisksEnabled`` uniquement.
+# Constat Augustin : ``financialLossEnabled`` peut être TRUE de façon
+# autonome (la « Perte Financière » est un produit GAP indépendant qui
+# se vend sans contrat d'assurance RC). De même ``legalProtectionEnabled``
+# (Protection Juridique souvent vendue à part) et
+# ``theftFireAndGlassEnabled`` (formule DOM-seule possible en B2B).
+# Seul **Tous Risques inclut TOUJOURS la Responsabilité Civile** par
+# définition fiscale et contractuelle française — c'est la seule
+# implication qu'on peut faire sans risque de poser un TRUE faux.
 _ENABLED_IMPLIES_CASCADE: dict[str, tuple[str, ...]] = {
     "civilLiabilityEnabled": (
         "allRisksEnabled",
-        "theftFireAndGlassEnabled",
-        "financialLossEnabled",
-        "legalProtectionEnabled",
     ),
 }
 
@@ -889,13 +891,19 @@ def _postpass_imply_enabled_cascade(
     """Propage les implications logiques entre *Enabled* booléens.
 
     Jalon 5.3.24 — règle métier : si on a détecté qu'un contrat possède
-    une couverture *avancée* (Tous Risques, Vol-Incendie-Bris, Perte
-    Financière, Protection Juridique), alors la Responsabilité Civile
-    est nécessairement souscrite — c'est la couche de base de toutes
-    les assurances auto. Avant ce post-pass, ``civilLiabilityEnabled``
-    pouvait rester vide alors qu'``allRisksEnabled = TRUE`` parce que
-    le prix RC était noyé dans le prix Tous Risques (une seule ligne
-    facture pour les deux).
+    Tous Risques (``allRisksEnabled = TRUE``), alors la Responsabilité
+    Civile est nécessairement souscrite : par définition fiscale et
+    contractuelle française, le « Tous Risques » englobe la RC. Avant
+    ce post-pass, ``civilLiabilityEnabled`` pouvait rester vide alors
+    qu'``allRisksEnabled = TRUE`` parce que le prix RC était noyé dans
+    le prix Tous Risques (une seule ligne facture pour les deux).
+
+    Jalon 5.3.31 — Cascade restreinte à ``allRisksEnabled``. Constat
+    Augustin : ``financialLossEnabled`` (Perte Financière), ``legalProtectionEnabled``
+    (Protection Juridique) et ``theftFireAndGlassEnabled`` (Vol/Inc/Bris)
+    peuvent être ``TRUE`` de façon autonome sans qu'il y ait pour autant
+    de contrat RC souscrit (produits indépendants, formules DOM-seules
+    en B2B, etc.). On ne déduit donc plus la RC depuis ces 3 champs.
 
     On ne met jamais TRUE par-dessus une valeur déjà posée — si une
     règle prioritaire a posé FALSE explicitement on respecte ça.
@@ -928,8 +936,8 @@ def _postpass_imply_enabled_cascade(
                 conflicts_ignored=[],
                 notes=(
                     f"Cascade implicite : {triggers_str} = TRUE → "
-                    f"{target} = TRUE (qui dit assurance avancée dit "
-                    f"Responsabilité Civile)."
+                    f"{target} = TRUE (Tous Risques inclut "
+                    f"obligatoirement la Responsabilité Civile)."
                 ),
             ))
 

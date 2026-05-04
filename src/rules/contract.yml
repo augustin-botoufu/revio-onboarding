@@ -864,9 +864,9 @@ fields:
     enum: TRUE / FALSE
     notes: |
       TRUE si civilLiabilityPrice > 0 (P1), sinon cascade depuis
-      allRisks/theftFireAndGlass/financialLoss/legalProtection (P2 —
-      Jalon 5.3.24), sinon forcé TRUE par le toggle « Assurance loueur
-      globale » de la page Moteur (P3 — Jalon 5.3.24).
+      allRisksEnabled = TRUE (P2 — Tous Risques inclut RC, Jalon 5.3.24
+      restreint en 5.3.31), sinon forcé TRUE par le toggle « Assurance
+      loueur globale » de la page Moteur (P3 — Jalon 5.3.24).
     # Jalon 5.3.4 — source_label parlant (au lieu du brut "rule").
     rules:
     - priority: 1
@@ -874,12 +874,14 @@ fields:
       source_label: ⚙️ Calculé depuis civilLiabilityPrice > 0
       transform: rule_price_positive
       column: civilLiabilityPrice > 0
-    # Jalon 5.3.24 — cascade : qui dit assurance avancée dit RC.
+    # Jalon 5.3.24 (restreint en 5.3.31) — cascade depuis allRisks
+    # uniquement. financialLoss / legalProtection / theftFireAndGlass
+    # sortis de la cascade : ils peuvent exister sans contrat RC.
     - priority: 2
       source: rule
-      source_label: ⚙️ Cascade ← allRisks / theftFireAndGlass / financialLoss / legalProtection
+      source_label: ⚙️ Cascade ← allRisksEnabled (Tous Risques inclut RC)
       transform: rule_enabled_cascade
-      column: cascade ← *Enabled = TRUE
+      column: cascade ← allRisksEnabled = TRUE
     # Jalon 5.3.24 — toggle UI « Assurance loueur globale ».
     - priority: 3
       source: rule
