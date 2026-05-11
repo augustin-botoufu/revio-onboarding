@@ -337,15 +337,18 @@ class AyvensFactureParser(ArvalFactureParser):
 
     lessor = "ayvens"
 
-    # « Avenant N° X75355 - GH-090-SZ »
+    # « Avenant N° X75355 - GH-090-SZ » (pypdf) ou « AvenantN°X75355-GH-090-SZ »
+    # (pdfplumber, qui strippe les espaces sur ce PDF). Jalon 5.3.34 : on
+    # passe à ``\s*`` (0 ou n espaces) au lieu de ``\s+`` pour matcher les
+    # deux extractions.
     CONTRACT_HEADER_RE = re.compile(
-        r"Avenant\s+N\s*[°¨]\s*X?\s*(?P<number>\d+)\s*-\s*"
+        r"Avenant\s*N\s*[°¨]\s*X?\s*(?P<number>\d+)\s*-\s*"
         r"(?P<plate>[A-Z]{2}-\d{3}-[A-Z]{2})",
         re.I,
     )
-    # « Sous-total Avenant N°X75355 518,03 ... » — espace facultatif.
+    # « Sous-total Avenant N°X75355 518,03 ... » — idem ``\s*``.
     SOUS_TOTAL_RE = re.compile(
-        r"Sous-total\s+Avenant\s+N\s*[°¨]\s*X?\s*(?P<number>\d+)",
+        r"Sous-total\s*Avenant\s*N\s*[°¨]\s*X?\s*(?P<number>\d+)",
         re.I,
     )
     # Rubrique : <HT> <taux>,<dec>% (<TVA>)? <TTC>
