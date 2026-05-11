@@ -2002,10 +2002,22 @@ def _render_engine_uploader() -> None:
                 with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tf:
                     tf.write(data)
                     tmp_path = tf.name
+                # Jalon 5.3.33 — Détection lessor élargie (parité avec
+                # _detect_lessor_from_filename côté parser PDF). Avant :
+                # ne reconnaissait que "arval"/"ayvens"/"ald" → slug
+                # défaut "arval_facture_pdf" sur les factures Ayvens
+                # nommées « 5459928-…-LOYER-Detail_Facture-…pdf ».
                 lessor_hint = None
                 if "arval" in lower:
                     lessor_hint = "arval"
-                elif "ayvens" in lower or "ald" in lower:
+                elif any(k in lower for k in (
+                    "ayvens", "ald",
+                    "loyer-detail_facture", "loyer_detail_facture",
+                    "detail_facture", "detail-facture",
+                    "fiscalite_aen", "fiscalite-aen",
+                    "fiscalite_and", "fiscalite-and",
+                    "fiscalite_tuv", "fiscalite-tuv",
+                )):
                     lessor_hint = "ayvens"
                 df = pdfp.parse_factures_to_dataframe(
                     [tmp_path],
