@@ -3209,6 +3209,54 @@ def _render_contract_tab_body(engine_files: dict) -> None:
         **canonical_overrides,
     }
 
+    # ── Jalon 5.3.37 — Panneau diagnostic factures PDF ──────────────────
+    # Affiche pour chaque slug *_facture_pdf chargé : nb lignes, colonnes
+    # Price, et un sample row. Permet de voir si le parser a fait son
+    # boulot AVANT de débuguer 10 fois côté engine.
+    _facture_slugs_loaded = [
+        (s, df) for s, df in source_dfs.items()
+        if s.endswith("_facture_pdf") and df is not None and not df.empty
+    ]
+    if _facture_slugs_loaded:
+        with st.expander(
+            f"🔬 Diagnostic factures PDF parsées ({len(_facture_slugs_loaded)}) — "
+            "à ouvrir si les prix manquent côté contrats",
+            expanded=False,
+        ):
+            for _slug, _fdf in _facture_slugs_loaded:
+                st.markdown(f"**Slug** : `{_slug}` — **{len(_fdf)} ligne(s)**")
+                _price_cols = [c for c in _fdf.columns
+                               if "Price" in c and not c.endswith(("_ht", "_ttc"))]
+                _price_cols_with_data = [
+                    c for c in _price_cols
+                    if _fdf[c].notna().any() and (_fdf[c] != 0).any()
+                ]
+                st.caption(
+                    f"Colonnes prix présentes : {len(_price_cols)} · "
+                    f"**Avec au moins 1 valeur non-vide** : {len(_price_cols_with_data)}"
+                )
+                if not _price_cols_with_data:
+                    st.error(
+                        "❌ AUCUNE colonne prix ne contient de valeur. "
+                        "Le parser PDF a échoué à classifier les rubriques. "
+                        "Vérifie que `pdf_parser.py` et `rubriques_facture.yml` "
+                        "sont bien à jour (Jalon 5.3.34+) sur GitHub."
+                    )
+                else:
+                    st.success(
+                        f"✅ Le parser a rempli : "
+                        + ", ".join(f"`{c}`" for c in _price_cols_with_data)
+                    )
+                # Sample : show first 3 rows with key columns
+                _sample_cols = ["plate", "number", "totalPrice"] + _price_cols_with_data
+                _sample_cols = [c for c in _sample_cols if c in _fdf.columns]
+                if _sample_cols:
+                    st.dataframe(
+                        _fdf[_sample_cols].head(3),
+                        use_container_width=True,
+                    )
+                st.markdown("---")
+
     # --- Pre-run probe: find unresolved mandatory fields BEFORE the run ---
     # Runs the engine silently with current overrides so we can render the
     # "Colonnes non identifiées" cards upfront. Kept in a try/except so a
