@@ -1736,20 +1736,34 @@ def apply_rules(
     # heuristic already found the column to build the index, so we just
     # copy the key into the cell.
     if "plate" in out_df.columns:
+        # Jalon 5.3.33 — la clé d'indexation est dépouillée des tirets
+        # (« GQ960WE ») pour faciliter le matching cross-source. Avant
+        # d'écrire la valeur finale dans la colonne ``plate``, on la
+        # repasse dans ``normalize_plate`` pour obtenir le format Revio
+        # standard « GQ-960-WE ».
+        from .normalizers import normalize_plate as _normalize_plate_canon
         for key in all_keys:
             if not _is_null(out_df.at[key, "plate"]):
                 continue
             if key:
-                out_df.at[key, "plate"] = key
+                canon, _ = _normalize_plate_canon(key)
+                final = canon if canon else key
+                out_df.at[key, "plate"] = final
                 source_by_cell[(key, "plate")] = "derived"
                 lineage.record(LineageRecord(
                     table="contract", key=key, field="plate",
-                    value=key, source_used="derived",
+                    value=final, source_used="derived",
                     source_col="(clé d'indexation)", source_row=None, priority=99,
                     transform="from_plate_key",
                     rule_id=build_rule_id("contract", "plate", "derived", 99),
                     conflicts_ignored=[],
-                    notes="Plaque reprise de la clé d'indexation (aucune règle YAML ne l'a remplie).",
+                    notes=(
+                        "Plaque reprise de la clé d'indexation (aucune règle "
+                        "YAML ne l'a remplie), reformatée en " + (
+                            "format SIV standard." if canon != key
+                            else "format brut (pas reconnu comme plaque FR)."
+                        )
+                    ),
                 ))
     # `number` is no longer derived from the key — it's a normal field
     # populated by YAML rules reading explicit columns. Left blank if no
