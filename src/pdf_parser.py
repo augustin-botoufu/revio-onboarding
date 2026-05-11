@@ -81,24 +81,57 @@ class ContractBlock:
 # ---------- Extraction backend ----------
 
 
-def _extract_text(path: str | Path) -> str:
-    """Extract text from a PDF. Try pdfplumber first, fallback to pypdf."""
+def _extract_text(path: str | Path, prefer: str = "pdfplumber") -> str:
+    """Extract text from a PDF.
+
+    ``prefer='pdfplumber'`` (default) tries pdfplumber first, falls back to
+    pypdf. ``prefer='pypdf'`` reverses the order — utile pour les factures
+    Ayvens où pdfplumber **strippe les espaces** entre les mots (constat
+    Jalon 5.3.32 : la même facture donne ``Loyerfinancier`` avec pdfplumber
+    et ``Loyer financier`` avec pypdf).
+    """
     path = Path(path)
-    try:
-        import pdfplumber  # type: ignore
-        with pdfplumber.open(path) as pdf:
-            return "\n".join((p.extract_text() or "") for p in pdf.pages)
-    except Exception:
-        pass
-    try:
-        from pypdf import PdfReader  # type: ignore
-        reader = PdfReader(str(path))
-        return "\n".join((p.extract_text() or "") for p in reader.pages)
-    except Exception as e:
-        raise RuntimeError(
-            f"Impossible d'extraire le texte du PDF {path}. "
-            f"Vérifier qu'il n'est pas scanné (OCR non supporté). Cause : {e}"
-        )
+
+    def _try_pdfplumber() -> Optional[str]:
+        try:
+            import pdfplumber  # type: ignore
+            with pdfplumber.open(path) as pdf:
+                return "\n".join((p.extract_text() or "") for p in pdf.pages)
+        except Exception:
+            return None
+
+    def _try_pypdf() -> Optional[str]:
+        try:
+            from pypdf import PdfReader  # type: ignore
+            reader = PdfReader(str(path))
+            return "\n".join((p.extract_text() or "") for p in reader.pages)
+        except Exception:
+            return None
+
+    order = (_try_pypdf, _try_pdfplumber) if prefer == "pypdf" \
+        else (_try_pdfplumber, _try_pypdf)
+    for extractor in order:
+        txt = extractor()
+        if txt:
+            return txt
+    raise RuntimeError(
+        f"Impossible d'extraire le texte du PDF {path}. "
+        f"Vérifier qu'il n'est pas scanné (OCR non supporté)."
+    )
+
+
+def _detect_lessor_from_filename(path: str | Path) -> Optional[str]:
+    """Devine le loueur à partir du nom de fichier — léger et rapide
+    (avant même d'extraire le texte). Utile pour piloter l'extractor
+    PDF (cf. Jalon 5.3.32 : Ayvens veut pypdf, pas pdfplumber).
+    """
+    name = str(path).lower()
+    if "arval" in name:
+        return "arval"
+    if any(k in name for k in ("ayvens", "ald", "loyer-detail_facture",
+                                "detail_facture", "fiscalite_aen")):
+        return "ayvens"
+    return None
 
 
 # ---------- Helpers ----------
@@ -279,11 +312,65 @@ class ArvalFactureParser:
 
 
 class AyvensFactureParser(ArvalFactureParser):
-    """Ayvens facture — same general shape as Arval (loyer + rubriques
-    per contract in an 'Annexe'). Ayvens variants TBD when we get a
-    sample; for now we reuse the Arval regex which has matched well on
-    similar French lessor layouts. Overrideable field-by-field."""
+    """Ayvens facture parser — Jalon 5.3.32.
+
+    Diffère d'Arval sur 4 points (constat sur facture client réelle « Détail
+    Facture de Loyers N° 811420501 ») :
+
+    1. **« Avenant N° X<num> - <plate> »** au lieu de « Contrat N° <num> -
+       <plate> ». Le numéro est préfixé par ``X``, et la ligne d'en-tête
+       ne se termine PAS par un tiret de suite (juste plaque puis CR).
+    2. **« Sous-total Avenant N°X<num> »** au lieu de « Sous-total Contrat
+       N° <num> ». Note : pas d'espace entre N° et X dans le sous-total
+       (alors qu'il y en a un dans l'en-tête).
+    3. **Taux TVA au format « 20,00% »** (virgule + signe %) au lieu de
+       « 20.00 » (point, sans %). Les lignes à 0,00% n'ont pas de cellule
+       TVA (juste HT taux TTC) — typique pour « Assurance hors TVA » et
+       « Perte financière » qui ne sont pas soumises à TVA.
+    4. **Encodage de polices cassé** : ``é`` → ``{``, ``è`` → ``}``,
+       ``°`` → ``¨``. On normalise dans :meth:`parse` avant tout traitement.
+
+    Côté extraction : pypdf préserve les espaces dans ce PDF alors que
+    pdfplumber les écrase. Le bon extractor est choisi en amont via
+    :func:`parse_factures_pdfs` (cf. ``lessor_hint``).
+    """
+
     lessor = "ayvens"
+
+    # « Avenant N° X75355 - GH-090-SZ »
+    CONTRACT_HEADER_RE = re.compile(
+        r"Avenant\s+N\s*[°¨]\s*X?\s*(?P<number>\d+)\s*-\s*"
+        r"(?P<plate>[A-Z]{2}-\d{3}-[A-Z]{2})",
+        re.I,
+    )
+    # « Sous-total Avenant N°X75355 518,03 ... » — espace facultatif.
+    SOUS_TOTAL_RE = re.compile(
+        r"Sous-total\s+Avenant\s+N\s*[°¨]\s*X?\s*(?P<number>\d+)",
+        re.I,
+    )
+    # Rubrique : <HT> <taux>,<dec>% (<TVA>)? <TTC>
+    # On accepte aussi le format Arval (point + sans %) pour rester
+    # rétro-compat si Ayvens publie un PDF dans le format Arval.
+    RUBRIQUE_TAIL_RE = re.compile(
+        r"(?P<ht>" + _PRICE + r")\s+"
+        r"(?:(?P<taux>\d{1,2}[.,]\d{1,2})%?|H\.C\.)"
+        r"(?:\s+(?P<tva>" + _PRICE + r"))?\s+"
+        r"(?P<ttc>" + _PRICE + r")\s*$"
+    )
+
+    # Map des caractères mal encodés observés sur les factures Ayvens.
+    _ENCODING_FIX = str.maketrans({
+        "{": "é",
+        "}": "è",
+        "¨": "°",
+    })
+
+    def parse(self, text: str) -> tuple[list[ContractBlock], Optional[str]]:
+        # Normalise les caractères mal encodés AVANT toute analyse pour
+        # que les regex et le classifier de rubriques voient du texte
+        # propre (« Perte financière » au lieu de « Perte financi}re »).
+        text = text.translate(self._ENCODING_FIX)
+        return super().parse(text)
 
 
 class AutreLoueurFactureParser(ArvalFactureParser):
@@ -450,8 +537,17 @@ def parse_factures_to_dataframe(
     """
     all_rows: list[dict[str, Any]] = []
     for path in pdf_paths:
-        text = _extract_text(path)
-        lessor = lessor_hint or detect_lessor(text)
+        # Jalon 5.3.32 — Première passe : détecter le loueur depuis le
+        # nom de fichier pour choisir le bon extractor PDF. Sur factures
+        # Ayvens, pdfplumber strippe les espaces (« Loyerfinancier ») ;
+        # pypdf les préserve. Pour les autres loueurs, on garde le défaut
+        # pdfplumber qui marche mieux sur la majorité des PDF français.
+        _filename_lessor = lessor_hint or _detect_lessor_from_filename(path)
+        _prefer = "pypdf" if _filename_lessor == "ayvens" else "pdfplumber"
+        text = _extract_text(path, prefer=_prefer)
+        # Détection finale depuis le contenu (au cas où le filename
+        # n'indiquerait rien) — peut surclasser le filename hint.
+        lessor = lessor_hint or _filename_lessor or detect_lessor(text)
         parser_cls = PARSERS.get(lessor, AutreLoueurFactureParser)
         parser = parser_cls()
         blocks, facture_date = parser.parse(text)
