@@ -3210,51 +3210,111 @@ def _render_contract_tab_body(engine_files: dict) -> None:
     }
 
     # ── Jalon 5.3.37 — Panneau diagnostic factures PDF ──────────────────
-    # Affiche pour chaque slug *_facture_pdf chargé : nb lignes, colonnes
-    # Price, et un sample row. Permet de voir si le parser a fait son
-    # boulot AVANT de débuguer 10 fois côté engine.
-    _facture_slugs_loaded = [
-        (s, df) for s, df in source_dfs.items()
-        if s.endswith("_facture_pdf") and df is not None and not df.empty
+    # Jalon 5.3.38 — On regarde le DF BRUT du parser PDF (pas le DF
+    # merged) pour discriminer si le bug est dans le parser ou ailleurs.
+    _facture_files_raw = [
+        (k, info) for k, info in engine_files.items()
+        if info.get("slug", "").endswith("_facture_pdf")
+        and info.get("df") is not None and not info["df"].empty
     ]
-    if _facture_slugs_loaded:
+    if _facture_files_raw:
         with st.expander(
-            f"🔬 Diagnostic factures PDF parsées ({len(_facture_slugs_loaded)}) — "
+            f"🔬 Diagnostic factures PDF parsées ({len(_facture_files_raw)}) — "
             "à ouvrir si les prix manquent côté contrats",
             expanded=False,
         ):
-            for _slug, _fdf in _facture_slugs_loaded:
-                st.markdown(f"**Slug** : `{_slug}` — **{len(_fdf)} ligne(s)**")
-                _price_cols = [c for c in _fdf.columns
-                               if "Price" in c and not c.endswith(("_ht", "_ttc"))]
+            # ── Jalon 5.3.38 — Versions du code chargé en mémoire ──
+            # Sert à détecter un cache stale Streamlit Cloud : si la
+            # version affichée ici n'est PAS la dernière livrée, le code
+            # qui tourne est un vieux .pyc compilé.
+            try:
+                from src.pdf_parser import PARSER_VERSION as _PV
+            except ImportError:
+                _PV = "(ancienne version, pre-5.3.38)"
+            # Lire la version du YAML (commentaire en tête)
+            import yaml as _yaml
+            _yml_version = "(version inconnue)"
+            try:
+                _yml_path = Path(__file__).parent / "src" / "rules" / "rubriques_facture.yml"
+                _raw_yml = _yml_path.read_text(encoding="utf-8")
+                for _ln in _raw_yml.splitlines()[:3]:
+                    if "version:" in _ln:
+                        _yml_version = _ln.split("version:")[1].strip().split()[0]
+                        break
+            except Exception:
+                pass
+            st.info(
+                f"📦 **Versions chargées en mémoire** : "
+                f"`pdf_parser.py` = **{_PV}** · "
+                f"`rubriques_facture.yml` = **{_yml_version}** · "
+                f"Si ≠ 5.3.38 → cache Streamlit Cloud stale, bumper requirements.txt."
+            )
+            for _fkey, _finfo in _facture_files_raw:
+                _slug = _finfo["slug"]
+                _fdf = _finfo["df"]
+                st.markdown(
+                    f"**Fichier** : `{_finfo.get('filename', _fkey)}` → "
+                    f"slug `{_slug}` — **{len(_fdf)} ligne(s)**"
+                )
+                # Toutes les colonnes du DF brut, pour visibilité totale
+                _all_cols = list(_fdf.columns)
+                _price_cols = [c for c in _all_cols
+                               if "Price" in c and not c.endswith(("_ht", "_ttc"))
+                               and not c.startswith("__map__")]
                 _price_cols_with_data = [
                     c for c in _price_cols
                     if _fdf[c].notna().any() and (_fdf[c] != 0).any()
                 ]
+                _ht_cols_with_data = [
+                    c for c in _all_cols
+                    if c.endswith("_ht") and "Price" in c
+                    and _fdf[c].notna().any() and (_fdf[c] != 0).any()
+                ]
+                _ttc_cols_with_data = [
+                    c for c in _all_cols
+                    if c.endswith("_ttc") and "Price" in c
+                    and _fdf[c].notna().any() and (_fdf[c] != 0).any()
+                ]
                 st.caption(
-                    f"Colonnes prix présentes : {len(_price_cols)} · "
-                    f"**Avec au moins 1 valeur non-vide** : {len(_price_cols_with_data)}"
+                    f"Colonnes prix plain : {len(_price_cols)} · "
+                    f"**Avec valeur** : {len(_price_cols_with_data)} · "
+                    f"Colonnes _ht avec valeur : {len(_ht_cols_with_data)} · "
+                    f"_ttc avec valeur : {len(_ttc_cols_with_data)}"
                 )
-                if not _price_cols_with_data:
+                if not _price_cols_with_data and not _ht_cols_with_data and not _ttc_cols_with_data:
                     st.error(
-                        "❌ AUCUNE colonne prix ne contient de valeur. "
-                        "Le parser PDF a échoué à classifier les rubriques. "
-                        "Vérifie que `pdf_parser.py` et `rubriques_facture.yml` "
-                        "sont bien à jour (Jalon 5.3.34+) sur GitHub."
+                        "❌ AUCUNE colonne prix (plain, _ht ou _ttc) ne contient de "
+                        "valeur. Le parser PDF n'a pas classifié les rubriques. "
+                        "Causes possibles :\n"
+                        "- `pdf_parser.py` pas à jour (regex 5.3.34+ avec `\\s*`)\n"
+                        "- `rubriques_facture.yml` pas à jour (patterns 5.3.34+)\n"
+                        "- Streamlit Cloud cache stale (pousser sur requirements.txt force un fresh build)"
+                    )
+                elif not _price_cols_with_data and (_ht_cols_with_data or _ttc_cols_with_data):
+                    st.warning(
+                        f"⚠️ Colonnes _ht/_ttc remplies : "
+                        f"{', '.join(f'`{c}`' for c in (_ht_cols_with_data + _ttc_cols_with_data)[:5])}"
+                        f" — MAIS colonnes plain vides. Le `block_to_row` n'a pas "
+                        f"propagé _ht/_ttc → plain. Vraiment bizarre, signale-le."
                     )
                 else:
                     st.success(
-                        f"✅ Le parser a rempli : "
+                        f"✅ Le parser a rempli les colonnes plain : "
                         + ", ".join(f"`{c}`" for c in _price_cols_with_data)
                     )
                 # Sample : show first 3 rows with key columns
-                _sample_cols = ["plate", "number", "totalPrice"] + _price_cols_with_data
+                _sample_cols = ["plate", "number", "totalPrice"]
+                _sample_cols += _price_cols_with_data
+                _sample_cols += _ht_cols_with_data[:3]
+                _sample_cols += _ttc_cols_with_data[:3]
                 _sample_cols = [c for c in _sample_cols if c in _fdf.columns]
                 if _sample_cols:
                     st.dataframe(
                         _fdf[_sample_cols].head(3),
                         use_container_width=True,
                     )
+                # Liste des 5 premiers labels rubriques classifiés vs non-classifiés
+                # Note: this requires re-running classify per row, complex. Skip for now.
                 st.markdown("---")
 
     # --- Pre-run probe: find unresolved mandatory fields BEFORE the run ---

@@ -311,8 +311,11 @@ class ArvalFactureParser:
 # ---------- Ayvens / Autre loueur — stubs ----------
 
 
+PARSER_VERSION = "5.3.38"  # bump à chaque hotfix parser, lisible côté UI
+
+
 class AyvensFactureParser(ArvalFactureParser):
-    """Ayvens facture parser — Jalon 5.3.32.
+    """Ayvens facture parser — Jalon 5.3.32, regex `\\s*` 5.3.34, version 5.3.38.
 
     Diffère d'Arval sur 4 points (constat sur facture client réelle « Détail
     Facture de Loyers N° 811420501 ») :
