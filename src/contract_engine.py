@@ -209,25 +209,41 @@ def _get_column(source_slug, field_name, rule, manual_overrides, src_df: Optiona
     """Return the column name to read in `src_df` for this rule.
 
     Resolution order:
-      1. Explicit override from UI (manual mapping).
-      2. Rule's declared column (as in YAML / spec).
-      3. Fallback: for 'virtual' sources (pdf_parser output, client_file
-         normalized through learned_patterns), if the declared column is
-         absent but a column matching `field_name` exists, use it. This
-         lets the engine consume the clean columns produced by pdf_parser
-         (`totalPrice`, `durationMonths`, …) without the spec having to
-         enumerate them verbatim.
+      1. **Parser DF auto-mapping** (Jalon 5.3.36) — for ``_PARSER_DF_SOURCES``
+         slugs (PDF facture parsers), if ``field_name`` is a column of
+         ``src_df`` (the parser already produces canonical column names
+         like ``civilLiabilityPrice``, ``maintenancePrice``, etc.), we
+         use it directly. This bypasses any user manual override which
+         may have been left empty or wrongly set via the Contract
+         mapping UI — the parser knows better than the user for these
+         sources. Constat Augustin 5.3.36 : la facture Ayvens était bien
+         parsée mais les colonnes prix étaient ignorées parce que l'UI
+         de mapping demandait un override manuel qui n'aboutissait pas.
+      2. Explicit override from UI (manual mapping) — for non-parser
+         sources like client_file or autre_loueur_etat_parc.
+      3. Rule's declared column (as in YAML / spec).
+      4. Fallback: for ``client_file`` (normalized through learned_patterns),
+         if the declared column is absent but a column matching ``field_name``
+         exists, use it.
     """
+    # ── 1. Parser DF auto-mapping (Jalon 5.3.36) ──
+    if src_df is not None and source_slug in _PARSER_DF_SOURCES:
+        if field_name in src_df.columns:
+            return field_name
+
+    # ── 2. Manual override (UI) ──
     override = manual_overrides.get((source_slug, field_name))
     if override:
         return override
+
+    # ── 3. YAML declared column ──
     col = rule.get("column")
     if col and src_df is not None and col in src_df.columns:
         return col
+
+    # ── 4. client_file fallback by field_name match ──
     if src_df is not None:
-        if field_name in src_df.columns and (
-            source_slug in _PARSER_DF_SOURCES or source_slug == "client_file"
-        ):
+        if field_name in src_df.columns and source_slug == "client_file":
             return field_name
     return col
 
