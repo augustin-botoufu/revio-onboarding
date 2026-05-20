@@ -2051,6 +2051,10 @@ def _render_engine_uploader() -> None:
                 "learned_match_id": None,
                 "learned_match_hint": None,
                 "learned_mapping_applied_count": _lc_applied_pdf,
+                # Jalon 5.3.39 — bytes bruts conservés pour permettre le
+                # re-parse côté diagnostic. Pas idéal en RAM mais utile
+                # pour debug une fois par session.
+                "raw_bytes": data,
             }
             continue
 
@@ -3313,8 +3317,87 @@ def _render_contract_tab_body(engine_files: dict) -> None:
                         _fdf[_sample_cols].head(3),
                         use_container_width=True,
                     )
-                # Liste des 5 premiers labels rubriques classifiés vs non-classifiés
-                # Note: this requires re-running classify per row, complex. Skip for now.
+
+                # ── Jalon 5.3.39 — Test live du parser sur le PDF
+                # On extrait à nouveau le texte du PDF, on prend la ligne
+                # type "Loyer financier 314,51..." et on teste les regex
+                # en direct pour montrer exactement où ça plante.
+                st.markdown("#### 🔍 Re-parse live du PDF")
+                try:
+                    from src.pdf_parser import (
+                        AyvensFactureParser, _extract_text,
+                        classify_rubriques as _classif,
+                    )
+                    import tempfile, os as _os
+                    # Re-extract from temp file (pdf is in memory at this stage)
+                    # Note : the parser was already called once; on a typique
+                    # re-run we recover from session_state.
+                    _pdf_bytes = _finfo.get("raw_bytes")  # may be None
+                    _text_pdfplumber = ""
+                    _text_pypdf = ""
+                    if _pdf_bytes:
+                        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as _tf:
+                            _tf.write(_pdf_bytes)
+                            _tmp = _tf.name
+                        try:
+                            _text_pdfplumber = _extract_text(_tmp, prefer="pdfplumber") or ""
+                            _text_pypdf = _extract_text(_tmp, prefer="pypdf") or ""
+                        finally:
+                            try:
+                                _os.unlink(_tmp)
+                            except Exception:
+                                pass
+
+                    st.caption(
+                        f"Texte extrait — pdfplumber : **{len(_text_pdfplumber)} chars** · "
+                        f"pypdf : **{len(_text_pypdf)} chars**"
+                    )
+
+                    _parser = AyvensFactureParser()
+                    for _label, _txt in [("pdfplumber", _text_pdfplumber),
+                                          ("pypdf", _text_pypdf)]:
+                        if not _txt:
+                            st.markdown(f"**{_label}** : (vide)")
+                            continue
+                        _fixed = _txt.translate(_parser._ENCODING_FIX)
+                        _hdr_matches = list(
+                            _parser.CONTRACT_HEADER_RE.finditer(_fixed)
+                        )
+                        # Trouve une ligne « Loyer financier ... » dans le 1er bloc
+                        _rub_match = None
+                        _rub_line = None
+                        for _ln in _fixed.splitlines():
+                            _ln_s = _ln.strip()
+                            if "oyer" in _ln_s.lower() and len(_ln_s) < 200:
+                                _m = _parser.RUBRIQUE_TAIL_RE.search(_ln_s)
+                                if _m:
+                                    _rub_match = _m
+                                    _rub_line = _ln_s
+                                    break
+                                elif _rub_line is None:
+                                    _rub_line = _ln_s  # garder pour show
+                        st.markdown(
+                            f"**{_label}** : "
+                            f"`CONTRACT_HEADER_RE` matches = **{len(_hdr_matches)}** · "
+                            f"sample rubrique « loyer » regex match = **{'✓' if _rub_match else '❌'}**"
+                        )
+                        if _rub_line:
+                            st.code(f"Ligne testée : {_rub_line!r}", language="text")
+                        if _rub_match:
+                            st.caption(
+                                f"HT={_rub_match.group('ht')}, "
+                                f"taux={_rub_match.group('taux')}, "
+                                f"TVA={_rub_match.group('tva')}, "
+                                f"TTC={_rub_match.group('ttc')}"
+                            )
+
+                    # First 500 chars of pypdf (or pdfplumber) extraction
+                    _sample_txt = (_text_pypdf or _text_pdfplumber)[:800]
+                    if _sample_txt:
+                        with st.expander("📄 800 premiers caractères du texte extrait"):
+                            st.code(_sample_txt, language="text")
+                except Exception as _e:
+                    st.warning(f"Diagnostic live impossible : {_e}")
                 st.markdown("---")
 
     # --- Pre-run probe: find unresolved mandatory fields BEFORE the run ---
