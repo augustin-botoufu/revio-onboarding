@@ -16,4 +16,4 @@ pypdf>=4.0.0
 
 # Jalon 5.3.35 — bump fictif pour forcer un fresh install côté Streamlit
 # Cloud (les .pyc compilés étaient stale et servaient l'ancien code).
-# build_id: 2026-05-11-jalon-5.3.40
+# build_id: 2026-05-20-jalon-5.3.41

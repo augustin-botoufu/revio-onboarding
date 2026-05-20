@@ -3251,7 +3251,7 @@ def _render_contract_tab_body(engine_files: dict) -> None:
                 f"📦 **Versions chargées en mémoire** : "
                 f"`pdf_parser.py` = **{_PV}** · "
                 f"`rubriques_facture.yml` = **{_yml_version}** · "
-                f"Si ≠ 5.3.40 → cache Streamlit Cloud stale, bumper requirements.txt."
+                f"Si ≠ 5.3.41 → cache Streamlit Cloud stale, bumper requirements.txt."
             )
             for _fkey, _finfo in _facture_files_raw:
                 _slug = _finfo["slug"]
@@ -3306,12 +3306,23 @@ def _render_contract_tab_body(engine_files: dict) -> None:
                         f"✅ Le parser a rempli les colonnes plain : "
                         + ", ".join(f"`{c}`" for c in _price_cols_with_data)
                     )
-                # Sample : show first 3 rows with key columns
-                _sample_cols = ["plate", "number", "totalPrice"]
-                _sample_cols += _price_cols_with_data
-                _sample_cols += _ht_cols_with_data[:3]
-                _sample_cols += _ttc_cols_with_data[:3]
-                _sample_cols = [c for c in _sample_cols if c in _fdf.columns]
+                # Sample : show first 3 rows with key columns.
+                # Jalon 5.3.41 — dédup obligatoire : `totalPrice` apparaît
+                # à la fois dans la liste fixe ET dans _price_cols_with_data
+                # (il contient « Price »). Sans dédup, _fdf[_sample_cols]
+                # crée des colonnes dupliquées → crash pyarrow.
+                _raw_sample = (
+                    ["plate", "number", "totalPrice"]
+                    + _price_cols_with_data
+                    + _ht_cols_with_data[:3]
+                    + _ttc_cols_with_data[:3]
+                )
+                _seen_cols: set = set()
+                _sample_cols = []
+                for _c in _raw_sample:
+                    if _c in _fdf.columns and _c not in _seen_cols:
+                        _seen_cols.add(_c)
+                        _sample_cols.append(_c)
                 if _sample_cols:
                     st.dataframe(
                         _fdf[_sample_cols].head(3),

@@ -1,4 +1,4 @@
-# version: 5.3.40  ← visible côté UI pour vérifier déploiement Streamlit Cloud
+# version: 5.3.41  ← visible côté UI pour vérifier déploiement Streamlit Cloud
 whitelist:
 - pattern: loyer|financement|location|amortissement
   revio_field: null

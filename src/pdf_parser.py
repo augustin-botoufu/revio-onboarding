@@ -311,7 +311,7 @@ class ArvalFactureParser:
 # ---------- Ayvens / Autre loueur — stubs ----------
 
 
-PARSER_VERSION = "5.3.40"  # bump à chaque hotfix parser, lisible côté UI
+PARSER_VERSION = "5.3.41"  # bump à chaque hotfix parser, lisible côté UI
 
 
 class AyvensFactureParser(ArvalFactureParser):
