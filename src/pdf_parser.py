@@ -311,7 +311,7 @@ class ArvalFactureParser:
 # ---------- Ayvens / Autre loueur — stubs ----------
 
 
-PARSER_VERSION = "5.3.38"  # bump à chaque hotfix parser, lisible côté UI
+PARSER_VERSION = "5.3.40"  # bump à chaque hotfix parser, lisible côté UI
 
 
 class AyvensFactureParser(ArvalFactureParser):
@@ -543,14 +543,24 @@ def parse_factures_to_dataframe(
     """
     all_rows: list[dict[str, Any]] = []
     for path in pdf_paths:
-        # Jalon 5.3.32 — Première passe : détecter le loueur depuis le
-        # nom de fichier pour choisir le bon extractor PDF. Sur factures
-        # Ayvens, pdfplumber strippe les espaces (« Loyerfinancier ») ;
-        # pypdf les préserve. Pour les autres loueurs, on garde le défaut
-        # pdfplumber qui marche mieux sur la majorité des PDF français.
+        # Jalon 5.3.40 — On utilise **pdfplumber** pour TOUS les loueurs,
+        # y compris Ayvens.
+        #
+        # Historique : en 5.3.32 on avait forcé ``pypdf`` pour Ayvens en
+        # pensant que « pypdf préserve les espaces » (vrai) était un
+        # avantage. ERREUR : sur la facture Ayvens, pypdf met TOUT le
+        # bloc sur une seule ligne (aucun ``\n``). Le parser découpe le
+        # bloc en lignes pour trouver les rubriques → 1 seule mega-ligne
+        # → ``RUBRIQUE_TAIL_RE`` (ancré ``$``) ne matche qu'une rubrique
+        # au lieu de 7 → 0 prix extrait.
+        #
+        # pdfplumber, lui, découpe correctement chaque rubrique sur sa
+        # ligne. Il « colle » les mots du label (« Loyerfinancier ») mais
+        # les patterns whitelist 5.3.34 (``\s*``) gèrent déjà ce cas.
+        # Diagnostic prod 5.3.39 : pdfplumber → rubrique match ✓ ;
+        # pypdf → rubrique match ❌.
         _filename_lessor = lessor_hint or _detect_lessor_from_filename(path)
-        _prefer = "pypdf" if _filename_lessor == "ayvens" else "pdfplumber"
-        text = _extract_text(path, prefer=_prefer)
+        text = _extract_text(path, prefer="pdfplumber")
         # Détection finale depuis le contenu (au cas où le filename
         # n'indiquerait rien) — peut surclasser le filename hint.
         lessor = lessor_hint or _filename_lessor or detect_lessor(text)

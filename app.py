@@ -3251,7 +3251,7 @@ def _render_contract_tab_body(engine_files: dict) -> None:
                 f"📦 **Versions chargées en mémoire** : "
                 f"`pdf_parser.py` = **{_PV}** · "
                 f"`rubriques_facture.yml` = **{_yml_version}** · "
-                f"Si ≠ 5.3.38 → cache Streamlit Cloud stale, bumper requirements.txt."
+                f"Si ≠ 5.3.40 → cache Streamlit Cloud stale, bumper requirements.txt."
             )
             for _fkey, _finfo in _facture_files_raw:
                 _slug = _finfo["slug"]
